@@ -38,10 +38,38 @@ function updateProgress(step, total) {
   document.getElementById("progress-label").textContent = "Module " + step + " of " + total;
 }
 
+async function checkTokens() {
+  try {
+    const res = await fetch("/tokens/check");
+    return await res.json();
+  } catch(e) {
+    return { available: true, warn: false };
+  }
+}
+
 async function runDiligence() {
   const company = document.getElementById("company").value.trim();
   const inputs = document.getElementById("inputs").value.trim();
   if (!company) { alert("Please enter a company name."); return; }
+
+  // Pre-flight token check
+  const tokens = await checkTokens();
+  if (!tokens.available) {
+    document.getElementById("rightPanel").innerHTML =
+      '<div class="rate-limit-box"><strong>\u23F3 Token limit reached</strong>' +
+      '<p>' + (tokens.message || "Daily token limit reached. Please try again later.") + '</p></div>';
+    return;
+  }
+  if (tokens.warn && tokens.estimated_remaining !== undefined) {
+    const remainK = Math.round(tokens.estimated_remaining / 1000);
+    const limitK  = Math.round((tokens.daily_limit || 100000) / 1000);
+    const ok = confirm(
+      "Only ~" + remainK + "k tokens remaining (out of " + limitK + "k daily limit).\n\n" +
+      "A full analysis uses ~10k tokens \u2014 this run may not complete.\n\n" +
+      "Do you want to proceed?"
+    );
+    if (!ok) return;
+  }
 
   currentCompany = company;
   const btn = document.getElementById("runBtn");

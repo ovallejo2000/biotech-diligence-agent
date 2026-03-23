@@ -90,6 +90,88 @@ class UpdateRequest(BaseModel):
 def health():
     return {"status": "ok"}
 
+
+# Tokens used per full run (empirical average, used for daily estimate)
+_TOKENS_PER_RUN = 10_500
+_DAILY_LIMIT    = 100_000
+_WARN_THRESHOLD = 15_000   # show confirm dialog below this
+_TOKEN_LOG      = Path(".diligence_state/token_log.json")
+
+
+def _log_run_tokens(tokens: int = _TOKENS_PER_RUN):
+    """Append a token-usage entry to the local daily log."""
+    import time
+    _TOKEN_LOG.parent.mkdir(exist_ok=True)
+    entries = []
+    if _TOKEN_LOG.exists():
+        try:
+            entries = json.loads(_TOKEN_LOG.read_text())
+        except Exception:
+            pass
+    entries.append({"ts": time.time(), "tokens": tokens})
+    _TOKEN_LOG.write_text(json.dumps(entries))
+
+
+def _estimated_remaining() -> int:
+    """Sum tokens used in the last 24 h from the local log."""
+    import time
+    if not _TOKEN_LOG.exists():
+        return _DAILY_LIMIT
+    try:
+        entries = json.loads(_TOKEN_LOG.read_text())
+        cutoff = time.time() - 86_400
+        used = sum(e["tokens"] for e in entries if e["ts"] > cutoff)
+        return max(0, _DAILY_LIMIT - used)
+    except Exception:
+        return _DAILY_LIMIT
+
+
+@app.get("/tokens/check")
+def check_tokens():
+    """
+    Pre-flight token check. Returns:
+      available (bool), estimated_remaining (int), warn (bool), message (str)
+    """
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if not groq_key:
+        return {"available": True, "provider": "other", "warn": False}
+
+    estimated = _estimated_remaining()
+
+    # Live 1-token call to detect 429s and read per-minute headroom
+    try:
+        from openai import OpenAI
+        model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+        raw = client.chat.completions.with_raw_response.create(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+        )
+        minute_remaining = int(raw.headers.get("x-ratelimit-remaining-tokens", -1))
+        warn = estimated < _WARN_THRESHOLD
+        return {
+            "available": True,
+            "provider": "groq",
+            "estimated_remaining": estimated,
+            "daily_limit": _DAILY_LIMIT,
+            "minute_remaining": minute_remaining,
+            "warn": warn,
+        }
+    except Exception as e:
+        err = str(e)
+        if "rate_limit_exceeded" in err or "429" in err:
+            return {
+                "available": False,
+                "provider": "groq",
+                "estimated_remaining": estimated,
+                "daily_limit": _DAILY_LIMIT,
+                "warn": True,
+                "message": _friendly_error(err),
+            }
+        # Unknown error — don't block the run
+        return {"available": True, "provider": "groq", "estimated_remaining": estimated, "warn": False}
+
 @app.get("/modules")
 def list_modules():
     return {"modules": list(MODULE_MAP.keys())}
@@ -111,6 +193,7 @@ def stream_diligence(company: str, inputs: Optional[str] = None):
                 output_format="markdown",
                 progress_callback=progress_callback,
             )
+            _log_run_tokens()
             q.put(("memo", memo))
         except Exception as e:
             q.put(("error", _friendly_error(str(e))))
@@ -338,7 +421,6 @@ def index():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
-    <a href="/docs" class="header-link">API Docs</a>
   </div>
 </header>
 

@@ -52,23 +52,13 @@ async function runDiligence() {
   const inputs = document.getElementById("inputs").value.trim();
   if (!company) { alert("Please enter a company name."); return; }
 
-  // Pre-flight token check
+  // Pre-flight token check — hard block if not enough for a full run
   const tokens = await checkTokens();
   if (!tokens.available) {
     document.getElementById("rightPanel").innerHTML =
-      '<div class="rate-limit-box"><strong>\u23F3 Token limit reached</strong>' +
-      '<p>' + (tokens.message || "Daily token limit reached. Please try again later.") + '</p></div>';
+      '<div class="rate-limit-box"><strong>\u23F3 Not enough tokens</strong>' +
+      '<p>' + (tokens.message || "Not enough tokens for a full analysis. Please try again later.") + '</p></div>';
     return;
-  }
-  if (tokens.warn && tokens.estimated_remaining !== undefined) {
-    const remainK = Math.round(tokens.estimated_remaining / 1000);
-    const limitK  = Math.round((tokens.daily_limit || 100000) / 1000);
-    const ok = confirm(
-      "Only ~" + remainK + "k tokens remaining (out of " + limitK + "k daily limit).\n\n" +
-      "A full analysis uses ~10k tokens \u2014 this run may not complete.\n\n" +
-      "Do you want to proceed?"
-    );
-    if (!ok) return;
   }
 
   currentCompany = company;

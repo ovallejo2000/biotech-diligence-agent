@@ -92,10 +92,10 @@ def health():
 
 
 # Tokens used per full run (empirical average, used for daily estimate)
-_TOKENS_PER_RUN = 10_500
-_DAILY_LIMIT    = 100_000
-_WARN_THRESHOLD = 15_000   # show confirm dialog below this
-_TOKEN_LOG      = Path(".diligence_state/token_log.json")
+_TOKENS_PER_RUN     = 10_500
+_DAILY_LIMIT        = 100_000
+_MIN_TOKENS_TO_RUN  = 12_000   # hard block below this — not enough for a full run
+_TOKEN_LOG          = Path(".diligence_state/token_log.json")
 
 
 def _log_run_tokens(tokens: int = _TOKENS_PER_RUN):
@@ -138,6 +138,20 @@ def check_tokens():
 
     estimated = _estimated_remaining()
 
+    # Hard block on daily estimate before even hitting the API
+    if estimated < _MIN_TOKENS_TO_RUN:
+        remainK = round(estimated / 1000, 1)
+        return {
+            "available": False,
+            "provider": "groq",
+            "estimated_remaining": estimated,
+            "daily_limit": _DAILY_LIMIT,
+            "message": (
+                f"Not enough tokens for a full analysis (~{remainK}k remaining, need ~12k). "
+                "Groq's free tier refreshes on a 24-hour rolling window — check back in a few hours."
+            ),
+        }
+
     # Live 1-token call to detect 429s and read per-minute headroom
     try:
         from openai import OpenAI
@@ -149,14 +163,12 @@ def check_tokens():
             max_tokens=1,
         )
         minute_remaining = int(raw.headers.get("x-ratelimit-remaining-tokens", -1))
-        warn = estimated < _WARN_THRESHOLD
         return {
             "available": True,
             "provider": "groq",
             "estimated_remaining": estimated,
             "daily_limit": _DAILY_LIMIT,
             "minute_remaining": minute_remaining,
-            "warn": warn,
         }
     except Exception as e:
         err = str(e)
@@ -166,11 +178,10 @@ def check_tokens():
                 "provider": "groq",
                 "estimated_remaining": estimated,
                 "daily_limit": _DAILY_LIMIT,
-                "warn": True,
                 "message": _friendly_error(err),
             }
         # Unknown error — don't block the run
-        return {"available": True, "provider": "groq", "estimated_remaining": estimated, "warn": False}
+        return {"available": True, "provider": "groq", "estimated_remaining": estimated}
 
 @app.get("/modules")
 def list_modules():

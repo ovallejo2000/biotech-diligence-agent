@@ -88,8 +88,11 @@ async function runDiligence() {
     es.close();
     let msg = "An error occurred.";
     try { msg = JSON.parse(e.data).message; } catch(ex) {}
+    const isRateLimit = msg.indexOf("token limit") !== -1 || msg.indexOf("Rate limit") !== -1 || msg.indexOf("rolling window") !== -1;
+    const boxClass = isRateLimit ? "rate-limit-box" : "error-box";
+    const label = isRateLimit ? "\u23F3 Token limit reached" : "Error";
     document.getElementById("rightPanel").innerHTML =
-      '<div class="error-box"><strong>Error:</strong> ' + msg + '</div>';
+      '<div class="' + boxClass + '"><strong>' + label + '</strong><p>' + msg + '</p></div>';
     btn.disabled = false;
     btn.textContent = "Run Full Diligence";
   });

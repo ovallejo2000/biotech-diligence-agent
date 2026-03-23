@@ -38,6 +38,28 @@ def get_orchestrator():
     return DiligenceOrchestrator(verbose=False)
 
 
+def _friendly_error(raw: str) -> str:
+    """Convert raw API error strings into human-readable messages."""
+    import re
+    # Groq / OpenAI rate limit: parse out the retry time
+    if "rate_limit_exceeded" in raw or "Rate limit reached" in raw:
+        retry_match = re.search(r"Please try again in ([\d]+m[\d.]+s|[\d.]+s|[\d.]+m)", raw)
+        tpd_match = re.search(r"tokens per day.*?Limit ([\d,]+).*?Used ([\d,]+)", raw, re.DOTALL)
+        if retry_match:
+            wait = retry_match.group(1)
+            if tpd_match:
+                limit = int(tpd_match.group(1).replace(",", ""))
+                used = int(tpd_match.group(2).replace(",", ""))
+                pct = int(used / limit * 100)
+                return (
+                    f"Daily token limit reached ({pct}% used). "
+                    f"Try again in {wait} — Groq's free tier refreshes on a 24-hour rolling window."
+                )
+            return f"Rate limit reached. Try again in {wait}."
+        return "Rate limit reached. Please wait a few minutes and try again."
+    return raw
+
+
 # ------------------------------------------------------------------
 # Models
 # ------------------------------------------------------------------
@@ -91,7 +113,7 @@ def stream_diligence(company: str, inputs: Optional[str] = None):
             )
             q.put(("memo", memo))
         except Exception as e:
-            q.put(("error", str(e)))
+            q.put(("error", _friendly_error(str(e))))
         finally:
             q.put(("done", None))
 
@@ -302,6 +324,9 @@ def index():
   /* ── Error ── */
   .error-box { background: #2b0a0a; border: 1px solid #5c1a1a; border-radius: 8px;
                padding: 1rem 1.25rem; color: var(--red); font-size: 0.875rem; }
+  .rate-limit-box { background: #1a1500; border: 1px solid #4a3800; border-radius: 8px;
+                    padding: 1rem 1.25rem; color: #c8a84b; font-size: 0.875rem; }
+  .rate-limit-box p { margin: 0.4rem 0 0; color: #a08830; }
 </style>
 </head>
 <body>

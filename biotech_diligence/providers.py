@@ -126,7 +126,7 @@ def GroqClient(api_key: str | None = None, model: str = "llama-3.3-70b-versatile
 # Gemini — cloud, free tier (requires free Google account)
 # ------------------------------------------------------------------
 
-def GeminiClient(api_key: str | None = None, model: str = "gemini-1.5-flash"):
+def GeminiClient(api_key: str | None = None, model: str = "gemini-2.0-flash"):
     """
     Client for Google Gemini (free tier via OpenAI-compatible endpoint).
 
@@ -184,7 +184,7 @@ def auto_client() -> tuple[object, str]:
     """
     Auto-detect available provider from environment variables.
     Returns (client, model_name).
-    Priority: Anthropic → Groq → Gemini → Ollama
+    Priority: Anthropic → Gemini → Groq → Ollama
     """
     import os
 
@@ -194,15 +194,15 @@ def auto_client() -> tuple[object, str]:
         model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
         return anthropic.Anthropic(), model
 
-    # 2. Groq (free tier)
-    if os.environ.get("GROQ_API_KEY"):
-        model = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
-        return GroqClient(model=model), model
-
-    # 3. Gemini (free tier)
+    # 2. Gemini (free tier — prioritised for recency of training data)
     if os.environ.get("GEMINI_API_KEY"):
-        model = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+        model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
         return GeminiClient(model=model), model
+
+    # 3. Groq (free tier — fallback)
+    if os.environ.get("GROQ_API_KEY"):
+        model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        return GroqClient(model=model), model
 
     # 4. Ollama (local, fully free)
     if os.environ.get("OLLAMA_MODEL") or _ollama_running():

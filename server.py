@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, UploadFile, File
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse, StreamingResponse, Response
     from fastapi.staticfiles import StaticFiles
@@ -329,6 +329,43 @@ def get_demo():
     return {"company": "Karuna Therapeutics (KarXT \u2014 xanomeline-trospium)", "memo": demo_path.read_text()}
 
 
+@app.post("/extract")
+async def extract_files(files: list[UploadFile] = File(...)):
+    """Extract text from uploaded files (PDF, DOCX, TXT). Returns combined text."""
+    results = []
+    for f in files:
+        try:
+            content = await f.read()
+            name = f.filename or ""
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+            if ext == "pdf":
+                from pdfminer.high_level import extract_text_to_fp
+                from pdfminer.layout import LAParams
+                import io
+                out = io.StringIO()
+                extract_text_to_fp(io.BytesIO(content), out, laparams=LAParams())
+                text = out.getvalue().strip()
+
+            elif ext in ("docx", "doc"):
+                import docx, io
+                doc = docx.Document(io.BytesIO(content))
+                text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+            elif ext in ("txt", "md", "csv"):
+                text = content.decode("utf-8", errors="ignore").strip()
+
+            else:
+                text = content.decode("utf-8", errors="ignore").strip()
+
+            if text:
+                results.append(f"[{name}]\n{text}")
+        except Exception as e:
+            results.append(f"[{f.filename} — could not extract: {e}]")
+
+    return {"text": "\n\n---\n\n".join(results), "file_count": len(results)}
+
+
 # ------------------------------------------------------------------
 # Methodology page
 # ------------------------------------------------------------------
@@ -422,6 +459,8 @@ def methodology():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
+    <a href="/news" class="header-link">News</a>
+    <span class="nav-sep">|</span>
     <a href="/history" class="header-link">History</a>
     <span class="nav-sep">|</span>
     <a href="/" class="header-link">&larr; Back to Agent</a>
@@ -730,6 +769,8 @@ def history_page():
   <div class="header-right">
     <a href="/" class="header-link">&larr; Back to Agent</a>
     <span class="nav-sep">|</span>
+    <a href="/news" class="header-link">News</a>
+    <span class="nav-sep">|</span>
     <a href="/methodology" class="header-link">How It Works</a>
   </div>
 </header>
@@ -911,6 +952,23 @@ def index():
   .btn-secondary:hover { border-color: var(--muted); color: var(--text); }
   .divider { border: none; border-top: 1px solid var(--border); margin: 0.25rem 0; }
 
+  /* ── Upload zone ── */
+  .upload-zone { border: 1px dashed var(--border); border-radius: 8px; padding: 0.75rem 1rem;
+                 display: flex; align-items: center; gap: 0.6rem; cursor: pointer;
+                 color: var(--muted); font-size: 0.8rem; transition: border-color 0.15s; }
+  .upload-zone:hover { border-color: var(--blue); color: var(--text); }
+  .upload-zone.drag-over { border-color: var(--blue); background: #1f3a5f22; }
+  .upload-hint { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
+  #fileList { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.4rem; }
+  .file-chip { display: flex; align-items: center; gap: 0.5rem; background: #1c2128;
+               border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+               font-size: 0.75rem; color: var(--text); }
+  .file-chip .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-chip .fsize { color: var(--muted); flex-shrink: 0; }
+  .file-chip .fremove { cursor: pointer; color: var(--muted); flex-shrink: 0; font-size: 1rem;
+                        line-height: 1; padding: 0 2px; }
+  .file-chip .fremove:hover { color: var(--red); }
+
   /* ── Progress ── */
   #progress-panel { display: none; flex-direction: column; gap: 0.35rem; }
   .module-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; }
@@ -1006,6 +1064,8 @@ def index():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
+    <a href="/news" class="header-link">News</a>
+    <span class="nav-sep">|</span>
     <a href="/history" class="header-link">History</a>
     <span class="nav-sep">|</span>
     <a href="/methodology" class="header-link">How It Works</a>
@@ -1022,7 +1082,20 @@ def index():
     </div>
     <div>
       <label>Raw inputs <span style="text-transform:none;font-weight:400">(optional)</span></label>
-      <textarea id="inputs" placeholder="Paste trial data, press releases, deck bullet points…"></textarea>
+      <textarea id="inputs" placeholder="Paste any text context: trial readouts, press releases, pipeline summaries, key data points…"></textarea>
+    </div>
+    <div>
+      <label>Attachments <span style="text-transform:none;font-weight:400">(optional)</span></label>
+      <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span>Click to attach files</span>
+        <span class="upload-hint">Pitch decks, data rooms, investor materials, clinical summaries &mdash; PDF, DOCX, TXT</span>
+      </div>
+      <input type="file" id="fileInput" multiple accept=".pdf,.docx,.doc,.txt,.md,.csv" style="display:none" onchange="handleFiles(this.files)">
+      <div id="fileList"></div>
     </div>
     <button class="btn btn-primary" id="runBtn" onclick="runDiligence()">Run Full Diligence</button>
 
@@ -1057,6 +1130,470 @@ def index():
 </div>
 
 <script src="/static/app.js"></script>
+</body>
+</html>"""
+
+
+# ------------------------------------------------------------------
+# Biotech fundraising news feed
+# ------------------------------------------------------------------
+
+import urllib.request as _urllib_req
+import xml.etree.ElementTree as _ET
+import re as _re
+import time as _time
+
+_NEWS_CACHE     = Path(".diligence_state/news_cache.json")
+_NEWS_LOG       = Path(".diligence_state/fundraise_log.json")
+_NEWS_TTL       = 7200   # 2 hours between RSS refreshes
+_NEWS_HISTORY   = 365 * 86400  # keep up to 12 months in the log
+
+_RSS_FEEDS = [
+    ("Fierce Biotech",  "https://www.fiercebiotech.com/rss/xml"),
+    ("BioPharma Dive",  "https://www.biopharmadive.com/feeds/news/"),
+    ("STAT News",       "https://www.statnews.com/feed/"),
+    ("BioSpace",        "https://www.biospace.com/rss/news.xml"),
+]
+
+_RAISE_RE = _re.compile(
+    r'\braises?|secures?|closes?\s+(?:\$|funding|\w+\s+round)'
+    r'|\$\d+[\.,]?\d*\s*[mb]illion|\bseries\s+[a-e]\b'
+    r'|seed\s+round|funding\s+round|\binitial\s+public\b',
+    _re.IGNORECASE
+)
+
+
+def _fetch_rss(url: str) -> list:
+    try:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = _urllib_req.Request(url, headers={"User-Agent": "BiotechDigest/1.0"})
+        with _urllib_req.urlopen(req, timeout=8, context=ctx) as r:
+            data = r.read()
+        root = _ET.fromstring(data)
+        def _el_text(parent, tag):
+            el = parent.find(tag)
+            if el is None:
+                return ""
+            return "".join(el.itertext()).strip()
+
+        items = []
+        for el in root.findall(".//item"):
+            items.append({
+                "title":   _el_text(el, "title"),
+                "link":    _el_text(el, "link"),
+                "summary": _el_text(el, "description"),
+                "date":    _el_text(el, "pubDate"),
+            })
+        return items
+    except Exception:
+        return []
+
+
+# Regex patterns for zero-LLM news extraction
+_AMT_RE = _re.compile(
+    r'\$\s*(\d+(?:\.\d+)?)\s*(billion|million|bn|b\b|m\b)',
+    _re.IGNORECASE,
+)
+_ROUND_PAT = _re.compile(
+    r'\b(series\s+[a-e](?:\+)?|seed(?:\s+round)?|ipo|initial\s+public\s+offer\w*'
+    r'|bridge(?:\s+round)?|convertible(?:\s+note)?|strategic(?:\s+round)?)\b',
+    _re.IGNORECASE,
+)
+# Verbs that signal a company is *actively* raising capital right now
+_RAISE_VERB = _re.compile(
+    r'\b(raises?\s+\$|banks?\s+\$|nets?\s+\$|lands?\s+\$|gets?\s+\$'
+    r'|secures?\s+\$|secures?\s+(?:funding|investment|round|capital)'
+    r'|closes?\s+\$|closes?\s+(?:series|seed|bridge|round|funding)'
+    r'|completes?\s+\$|completes?\s+(?:series|seed|bridge|round)'
+    r'|announces?\s+\$|raises?\s+(?:series|seed|bridge)\b)',
+    _re.IGNORECASE,
+)
+# Phrases that mark a historical/retrospective reference — not a current raise
+_HISTORICAL = _re.compile(
+    r'\bafter\s+its\b|\bfollowing\s+its\b|\bbuilding\s+on\b'
+    r'|\blast\s+year\b|\bin\s+20(?:2[0-3])\b|\bsince\s+its\b'
+    r'|\bwhat\s+\w+\s+is\s+build\w+\b|\bpost[- ]\$',
+    _re.IGNORECASE,
+)
+
+
+def _parse_amount(text: str) -> str:
+    m = _AMT_RE.search(text)
+    if not m:
+        return "Undisclosed"
+    num = float(m.group(1))
+    unit = m.group(2).lower()
+    if unit in ("billion", "bn", "b"):
+        return f"${num:g}B"
+    return f"${int(num) if num == int(num) else num}M"
+
+
+def _parse_round(text: str) -> str:
+    m = _ROUND_PAT.search(text)
+    if not m:
+        return "Unknown"
+    r = m.group(1).lower()
+    if r.startswith("series"):
+        letter = _re.sub(r"series\s*", "", r).strip().upper().rstrip("+")
+        return f"Series {letter}" if letter in "ABCDE" else "Series E+"
+    if "seed" in r:
+        return "Seed"
+    if "ipo" in r or "initial public" in r:
+        return "IPO"
+    if "bridge" in r:
+        return "Bridge"
+    if "convert" in r:
+        return "Convertible"
+    if "strategic" in r:
+        return "Strategic"
+    return "Unknown"
+
+
+def _parse_company(title: str) -> str:
+    # Strip "SOURCE: " prefixes like "STAT+: " or "EXCLUSIVE: "
+    title = _re.sub(r'^[A-Z][A-Za-z0-9+]*:\s*', '', title).strip()
+    m = _RAISE_VERB.search(title)
+    if not m:
+        return "Unknown"
+    before = title[:m.start()].strip().rstrip(",;")
+    words = before.split()
+    # Take up to 5 words — enough for "Relay Therapeutics" or "Karuna Therapeutics Inc"
+    return " ".join(words[:5]) if words else "Unknown"
+
+
+def _extract_fundraises(articles: list) -> list:
+    """Pure regex extraction — zero LLM tokens consumed."""
+    results = []
+    for a in articles:
+        title = a.get("title", "")
+        snippet = _re.sub(r'<[^>]+>', '', a.get("summary", ""))
+        full_text = title + " " + snippet[:300]
+
+        # Must have a raise verb and must NOT be a retrospective reference
+        if not _RAISE_VERB.search(title):
+            continue
+        if _HISTORICAL.search(title):
+            continue
+
+        company = _parse_company(title)
+        if company == "Unknown":
+            continue
+
+        results.append({
+            "company":    company,
+            "hq":         "Unknown",
+            "amount_usd": _parse_amount(full_text),
+            "round_type": _parse_round(full_text),
+            "date":       a.get("date", "")[:16],
+            "title":      title,
+            "url":        a.get("link", ""),
+            "source":     a.get("source", ""),
+        })
+    return results
+
+
+def _load_log() -> dict:
+    """Load the persistent fundraise log. Returns {url_key: fundraise_dict}."""
+    if not _NEWS_LOG.exists():
+        return {}
+    try:
+        entries = json.loads(_NEWS_LOG.read_text())
+        return {e["_key"]: e for e in entries if isinstance(e, dict) and "_key" in e}
+    except Exception:
+        return {}
+
+
+def _save_log(log: dict):
+    """Persist log, pruning entries older than 12 months."""
+    cutoff = _time.time() - _NEWS_HISTORY
+    entries = [e for e in log.values() if e.get("_saved_at", 0) >= cutoff]
+    _NEWS_LOG.parent.mkdir(exist_ok=True)
+    try:
+        _NEWS_LOG.write_text(json.dumps(entries))
+    except Exception:
+        pass
+
+
+def _entry_key(f: dict) -> str:
+    """Stable dedup key: prefer URL, fall back to normalised title."""
+    if f.get("url"):
+        return f["url"]
+    return _re.sub(r'\W+', '', f.get("title", "").lower())[:60]
+
+
+def _get_news(force: bool = False) -> dict:
+    now = _time.time()
+
+    # Return cached result if still fresh (skip RSS fetch, still return full log)
+    if not force and _NEWS_CACHE.exists():
+        try:
+            cached = json.loads(_NEWS_CACHE.read_text())
+            if now - cached.get("fetched_at", 0) < _NEWS_TTL:
+                return cached
+        except Exception:
+            pass
+
+    # Fetch RSS and extract new fundraises
+    all_articles: list = []
+    for source_name, url in _RSS_FEEDS:
+        items = _fetch_rss(url)
+        for it in items:
+            it["source"] = source_name
+        matching = [a for a in items if _RAISE_RE.search(
+            a.get("title", "") + " " + a.get("summary", "")[:200])]
+        all_articles.extend(matching[:12])
+
+    seen: set = set()
+    deduped = []
+    for a in all_articles:
+        key = _re.sub(r'\W+', '', a["title"].lower())[:50]
+        if key not in seen:
+            seen.add(key)
+            deduped.append(a)
+
+    fresh = _extract_fundraises(deduped[:30])
+
+    # Merge into persistent log
+    log = _load_log()
+    for f in fresh:
+        k = _entry_key(f)
+        if k not in log:
+            f["_key"] = k
+            f["_saved_at"] = now
+            log[k] = f
+    _save_log(log)
+
+    # Return all log entries sorted newest-first
+    all_entries = sorted(log.values(), key=lambda x: x.get("_saved_at", 0), reverse=True)
+    # Strip internal fields before returning
+    fundraises = [{k: v for k, v in e.items() if not k.startswith("_")} for e in all_entries]
+
+    result = {"fundraises": fundraises, "fetched_at": now}
+    _NEWS_CACHE.parent.mkdir(exist_ok=True)
+    try:
+        _NEWS_CACHE.write_text(json.dumps(result))
+    except Exception:
+        pass
+    return result
+
+
+@app.get("/news/data")
+def news_data(refresh: bool = False):
+    return _get_news(force=refresh)
+
+
+@app.get("/news", response_class=HTMLResponse)
+def news_page():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fundraising News \u2014 Biotech Diligence Agent</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #7d8590; --blue: #388bfd;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--border);
+           padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.1rem; font-weight: 700; }
+  .badge-header { font-size: 0.7rem; background: #1f3a5f; color: #79c0ff;
+                  padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .header-right { margin-left: auto; display: flex; gap: 1rem; align-items: center; }
+  .header-link { color: var(--muted); font-size: 0.8rem; text-decoration: none; }
+  .header-link:hover { color: var(--text); }
+  .nav-sep { color: var(--border); font-size: 0.8rem; user-select: none; }
+
+  .page { max-width: 1060px; margin: 0 auto; padding: 2.5rem 2rem 5rem; }
+  .page-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+  .page-title { font-size: 1.6rem; font-weight: 700; }
+  .page-meta { color: var(--muted); font-size: 0.8rem; }
+  .page-subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+
+  .toolbar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; }
+  .btn-refresh { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+                 padding: 0.4rem 0.9rem; border-radius: 6px; font-size: 0.8rem; cursor: pointer; }
+  .btn-refresh:hover { border-color: var(--blue); color: var(--blue); }
+  .btn-refresh:disabled { opacity: 0.5; cursor: default; }
+
+  /* Table */
+  .news-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .news-table th { text-align: left; padding: 0.5rem 0.75rem; color: var(--muted);
+                   font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+                   letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+  .news-table td { padding: 0.7rem 0.75rem; border-bottom: 1px solid #21262d; vertical-align: middle; }
+  .news-table tr:last-child td { border-bottom: none; }
+  .news-table tr:hover td { background: #161b22; }
+
+  .company-cell { font-weight: 600; color: var(--text); }
+  .company-cell a { color: var(--text); text-decoration: none; }
+  .company-cell a:hover { color: var(--blue); text-decoration: underline; }
+  .hq-cell { color: var(--muted); }
+
+  .round-badge { display: inline-block; padding: 2px 7px; border-radius: 10px;
+                 font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+  .round-seed    { background: #1a3a1a; color: #3fb950; }
+  .round-a       { background: #1f3a5f; color: #79c0ff; }
+  .round-b       { background: #1f3a5f; color: #79c0ff; }
+  .round-c       { background: #2d1f5f; color: #c9b1ff; }
+  .round-d       { background: #3a1f2d; color: #ff7b93; }
+  .round-ipo     { background: #2d2400; color: #d29922; }
+  .round-other   { background: #1c2128; color: var(--muted); }
+
+  .amount-cell { font-weight: 600; color: var(--green); white-space: nowrap; }
+  .date-cell   { color: var(--muted); white-space: nowrap; }
+  .source-cell { font-size: 0.75rem; }
+  .source-link { color: var(--blue); text-decoration: none; }
+  .source-link:hover { text-decoration: underline; }
+
+  .empty-state, .loading-state { text-align: center; padding: 4rem 2rem; color: var(--muted); }
+  .empty-state .icon, .loading-state .icon { font-size: 2.5rem; margin-bottom: 1rem; }
+  .empty-state h2, .loading-state h2 { font-size: 1.1rem; color: var(--text); margin-bottom: 0.5rem; }
+
+  .spinner { display: inline-block; width: 28px; height: 28px; border: 3px solid var(--border);
+             border-top-color: var(--blue); border-radius: 50%;
+             animation: spin 0.8s linear infinite; margin-bottom: 1rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#388bfd" stroke-width="2">
+    <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/>
+  </svg>
+  <h1>Biotech Diligence Agent</h1>
+  <span class="badge-header">VC-Grade Analysis</span>
+  <div class="header-right">
+    <a href="/" class="header-link">&larr; Back to Agent</a>
+    <span class="nav-sep">|</span>
+    <a href="/history" class="header-link">History</a>
+    <span class="nav-sep">|</span>
+    <a href="/methodology" class="header-link">How It Works</a>
+  </div>
+</header>
+
+<div class="page">
+  <div class="page-header">
+    <h2 class="page-title">Biotech Fundraising News</h2>
+    <span class="page-meta" id="lastUpdated"></span>
+  </div>
+  <p class="page-subtitle">Recent capital raises across biotech and pharma — sourced from industry news feeds.</p>
+
+  <div class="toolbar">
+    <button class="btn-refresh" id="refreshBtn" onclick="loadNews(true)">&#8635; Refresh</button>
+    <span id="statusMsg" style="color:var(--muted);font-size:0.8rem;"></span>
+  </div>
+
+  <div id="tableContainer">
+    <div class="loading-state">
+      <div class="spinner"></div>
+      <h2>Loading fundraising news&hellip;</h2>
+      <p>Fetching and analysing recent raises.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const ROUND_CLASS = {
+  "Seed": "round-seed",
+  "Series A": "round-a",
+  "Series B": "round-b",
+  "Series C": "round-c",
+  "Series D": "round-d",
+  "Series E+": "round-d",
+  "IPO": "round-ipo",
+};
+
+function roundClass(r) {
+  return ROUND_CLASS[r] || "round-other";
+}
+
+function formatDate(raw) {
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return raw.slice(0, 10);
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function timeSince(ts) {
+  const mins = Math.round((Date.now() / 1000 - ts) / 60);
+  if (mins < 2) return "just now";
+  if (mins < 60) return mins + " min ago";
+  const hrs = Math.round(mins / 60);
+  return hrs + "h ago";
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+async function loadNews(refresh) {
+  const btn = document.getElementById("refreshBtn");
+  const status = document.getElementById("statusMsg");
+  btn.disabled = true;
+  status.textContent = refresh ? "Refreshing\u2026" : "Loading\u2026";
+
+  try {
+    const url = "/news/data" + (refresh ? "?refresh=true" : "");
+    const res = await fetch(url);
+    const data = await res.json();
+    render(data);
+    const el = document.getElementById("lastUpdated");
+    if (data.fetched_at) el.textContent = "Updated " + timeSince(data.fetched_at);
+    status.textContent = "";
+  } catch(e) {
+    document.getElementById("tableContainer").innerHTML =
+      '<div class="empty-state"><div class="icon">\u26a0\ufe0f</div><h2>Could not load news</h2><p>' + esc(String(e)) + '</p></div>';
+    status.textContent = "";
+  }
+  btn.disabled = false;
+}
+
+function render(data) {
+  const rows = (data.fundraises || []);
+  if (!rows.length) {
+    document.getElementById("tableContainer").innerHTML =
+      '<div class="empty-state"><div class="icon">&#x1F4F0;</div>' +
+      '<h2>No fundraising news found</h2>' +
+      '<p>Try refreshing \u2014 news feeds update throughout the day.</p></div>';
+    return;
+  }
+
+  let html = '<table class="news-table"><thead><tr>' +
+    '<th>Company</th><th>HQ</th><th>Round</th><th>Amount</th><th>Date</th><th>Source</th>' +
+    '</tr></thead><tbody>';
+
+  for (const r of rows) {
+    const cls = roundClass(r.round_type);
+    const companyCell = r.url
+      ? '<a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.company) + '</a>'
+      : esc(r.company);
+    html += '<tr>' +
+      '<td class="company-cell">' + companyCell + '</td>' +
+      '<td class="hq-cell">' + esc(r.hq) + '</td>' +
+      '<td><span class="round-badge ' + cls + '">' + esc(r.round_type) + '</span></td>' +
+      '<td class="amount-cell">' + esc(r.amount_usd) + '</td>' +
+      '<td class="date-cell">' + formatDate(r.date) + '</td>' +
+      '<td class="source-cell">' + (r.url
+        ? '<a class="source-link" href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.source) + '</a>'
+        : esc(r.source)) + '</td>' +
+      '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById("tableContainer").innerHTML = html;
+}
+
+loadNews(false);
+</script>
 </body>
 </html>"""
 

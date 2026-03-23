@@ -14,6 +14,58 @@ const MODULES = [
 
 let currentCompany = "";
 let currentMemo = "";
+let attachedFiles = []; // { file, name }
+
+// ── File attachment handling ──────────────────────────────────────
+
+function handleFiles(fileList) {
+  for (const f of fileList) {
+    if (!attachedFiles.find(x => x.name === f.name)) {
+      attachedFiles.push({ file: f, name: f.name });
+    }
+  }
+  // reset input so same file can be re-added if removed
+  document.getElementById("fileInput").value = "";
+  renderFileList();
+}
+
+function removeFile(name) {
+  attachedFiles = attachedFiles.filter(x => x.name !== name);
+  renderFileList();
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderFileList() {
+  const list = document.getElementById("fileList");
+  if (!list) return;
+  list.innerHTML = attachedFiles.map(function(x) {
+    return '<div class="file-chip">' +
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0">' +
+      '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' +
+      '<span class="fname">' + x.name + '</span>' +
+      '<span class="fsize">' + formatBytes(x.file.size) + '</span>' +
+      '<span class="fremove" onclick="removeFile(\'' + x.name.replace(/'/g, "\\'") + '\')">&times;</span>' +
+      '</div>';
+  }).join("");
+}
+
+async function extractAttachments() {
+  if (!attachedFiles.length) return "";
+  const form = new FormData();
+  attachedFiles.forEach(x => form.append("files", x.file, x.name));
+  try {
+    const res = await fetch("/extract", { method: "POST", body: form });
+    const data = await res.json();
+    return data.text || "";
+  } catch(e) {
+    return "";
+  }
+}
 
 function buildModuleList() {
   const el = document.getElementById("module-list");
@@ -49,7 +101,7 @@ async function checkTokens() {
 
 async function runDiligence() {
   const company = document.getElementById("company").value.trim();
-  const inputs = document.getElementById("inputs").value.trim();
+  const manualInputs = document.getElementById("inputs").value.trim();
   if (!company) { alert("Please enter a company name."); return; }
 
   // Pre-flight token check — hard block if not enough for a full run
@@ -77,6 +129,14 @@ async function runDiligence() {
     '<h2>Running diligence on ' + company + '\u2026</h2>' +
     '<p>All 11 modules running in sequence. This takes 60\u201390 seconds.</p>' +
     '</div>';
+
+  // Extract text from any attached files
+  let fileText = "";
+  if (attachedFiles.length) {
+    document.getElementById("progress-label").textContent = "Extracting attachments\u2026";
+    fileText = await extractAttachments();
+  }
+  const inputs = [manualInputs, fileText].filter(Boolean).join("\n\n");
 
   let url = "/diligence/stream?company=" + encodeURIComponent(company);
   if (inputs) url += "&inputs=" + encodeURIComponent(inputs);
@@ -237,7 +297,22 @@ async function loadHistory() {
 }
 
 document.addEventListener("DOMContentLoaded", function() {
-  document.getElementById("company").addEventListener("keydown", function(e) {
+  const co = document.getElementById("company");
+  if (co) co.addEventListener("keydown", function(e) {
     if (e.key === "Enter") runDiligence();
   });
+
+  const zone = document.getElementById("uploadZone");
+  if (zone) {
+    zone.addEventListener("dragover", function(e) {
+      e.preventDefault(); zone.classList.add("drag-over");
+    });
+    zone.addEventListener("dragleave", function() {
+      zone.classList.remove("drag-over");
+    });
+    zone.addEventListener("drop", function(e) {
+      e.preventDefault(); zone.classList.remove("drag-over");
+      handleFiles(e.dataTransfer.files);
+    });
+  }
 });

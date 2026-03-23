@@ -316,17 +316,17 @@ def methodology():
   .page-title { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; }
   .page-subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 3rem; max-width: 600px; line-height: 1.6; }
 
-  /* Timeline */
+  /* Timeline — line and dots both centred at 1.25rem from the left edge */
   .timeline { position: relative; padding-left: 2.5rem; }
   .timeline::before {
-    content: ""; position: absolute; left: 0.85rem; top: 0; bottom: 0;
+    content: ""; position: absolute; left: calc(1.25rem - 1px); top: 0; bottom: 0;
     width: 2px; background: var(--border);
   }
 
-  /* Module card */
+  /* Module card — dot centred on the line */
   .module-card { position: relative; margin-bottom: 2rem; }
   .module-card::before {
-    content: ""; position: absolute; left: -2.5rem; top: 1.3rem;
+    content: ""; position: absolute; left: calc(-1.25rem - 5px); top: 1.3rem;
     width: 10px; height: 10px; border-radius: 50%;
     background: var(--blue); border: 2px solid var(--bg);
     box-shadow: 0 0 0 2px var(--blue);

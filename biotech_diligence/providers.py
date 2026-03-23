@@ -128,20 +128,21 @@ def GroqClient(api_key: str | None = None, model: str = "llama-3.3-70b-versatile
 
 def GeminiClient(api_key: str | None = None, model: str = "gemini-2.0-flash"):
     """
-    Client for Google Gemini (free tier via OpenAI-compatible endpoint).
+    Client for Google Gemini (free tier via google-genai SDK).
 
-    Free tier: 15 requests/min, 1M tokens/day.
+    Free tier: 15 requests/min, ~1,500 requests/day.
     Get a free key at https://aistudio.google.com/app/apikey
 
     Args:
         api_key: Gemini API key (or set GEMINI_API_KEY env var)
-        model:   Gemini model (default: gemini-1.5-flash)
+        model:   Gemini model (default: gemini-2.0-flash)
     """
     import os
     try:
-        from openai import OpenAI
+        from google import genai
+        from google.genai import types as genai_types
     except ImportError:
-        raise ImportError("Run: pip3 install openai")
+        raise ImportError("Run: pip3 install google-genai")
 
     key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
@@ -150,13 +151,23 @@ def GeminiClient(api_key: str | None = None, model: str = "gemini-2.0-flash"):
             "then set GEMINI_API_KEY=... in your .env file."
         )
 
-    raw = OpenAI(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key=key,
-    )
+    client = genai.Client(api_key=key)
+
+    class _GeminiMessages:
+        def create(self, model, max_tokens, system, messages, **kwargs):
+            prompt = "\n\n".join(msg["content"] for msg in messages if msg["role"] == "user")
+            resp = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system,
+                    max_output_tokens=max_tokens,
+                ),
+            )
+            return _Response(content=[_Content(text=resp.text)])
 
     class _GeminiClient:
-        messages = _MessagesNamespace(raw, model)
+        messages = _GeminiMessages()
 
     return _GeminiClient()
 

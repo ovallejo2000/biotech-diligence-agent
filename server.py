@@ -154,6 +154,15 @@ def list_companies():
     from biotech_diligence.state_manager import StateManager
     return {"companies": StateManager().list_companies()}
 
+@app.get("/demo")
+def get_demo():
+    """Return the pre-built Karuna Therapeutics demo memo (no API key needed)."""
+    import subprocess
+    demo_path = Path(__file__).parent / "memos" / "karuna_therapeutics_DEMO.md"
+    if not demo_path.exists():
+        subprocess.run(["python3", "demo.py"], cwd=Path(__file__).parent)
+    return {"company": "Karuna Therapeutics (KarXT \u2014 xanomeline-trospium)", "memo": demo_path.read_text()}
+
 
 # ------------------------------------------------------------------
 # Web UI
@@ -190,10 +199,10 @@ def index():
   .header-link:hover { color: var(--text); }
 
   /* ── Layout ── */
-  .layout { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 57px); }
+  .layout { display: grid; grid-template-columns: 340px 1fr; height: calc(100vh - 57px); overflow: hidden; }
 
   /* ── Left Panel ── */
-  .left-panel { background: var(--surface); border-right: 1px solid var(--border);
+  .left-panel { background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto;
                 padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
   label { font-size: 0.75rem; color: var(--muted); font-weight: 600;
           text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 0.4rem; }

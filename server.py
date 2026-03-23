@@ -270,6 +270,55 @@ def list_companies():
     from biotech_diligence.state_manager import StateManager
     return {"companies": StateManager().list_companies()}
 
+@app.get("/companies/all")
+def list_all_companies():
+    """Return all companies with their latest run summary, sorted by date."""
+    state_dir = Path(".diligence_state")
+    companies = []
+    if not state_dir.exists():
+        return {"companies": []}
+    for d in sorted(state_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        index_path = d / "index.json"
+        if not index_path.exists():
+            continue
+        try:
+            index = json.loads(index_path.read_text())
+            runs = index.get("runs", [])
+            if not runs:
+                continue
+            latest = runs[-1]
+            companies.append({
+                "slug": d.name,
+                "company": index.get("company", d.name),
+                "run_count": len(runs),
+                "runs": runs,
+                "latest_verdict": latest.get("verdict", ""),
+                "latest_date": latest.get("timestamp", "")[:10],
+                "latest_one_liner": latest.get("ic_one_liner", ""),
+            })
+        except Exception:
+            continue
+    companies.sort(key=lambda x: x["latest_date"], reverse=True)
+    return {"companies": companies}
+
+@app.get("/memo/{slug}/{run_id}")
+def get_memo(slug: str, run_id: str):
+    """Regenerate memo from stored run results."""
+    from biotech_diligence.state_manager import StateManager
+    from biotech_diligence.memo_generator import MemoGenerator
+    # Load by slug directly (bypasses _company_slug re-processing)
+    run_path = Path(".diligence_state") / slug / f"{run_id}.json"
+    if not run_path.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = json.loads(run_path.read_text())
+    memo = MemoGenerator().generate(
+        company=run["company"], results=run["results"], run_id=run_id
+    )
+    return {"company": run["company"], "run_id": run_id,
+            "timestamp": run.get("timestamp", ""), "memo": memo}
+
 @app.get("/demo")
 def get_demo():
     """Return the pre-built Karuna Therapeutics demo memo (no API key needed)."""
@@ -372,6 +421,7 @@ def methodology():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
+    <a href="/history" class="header-link">History</a>
     <a href="/" class="header-link">&larr; Back to Agent</a>
   </div>
 </header>
@@ -548,6 +598,258 @@ def methodology():
 
 
 # ------------------------------------------------------------------
+# History page
+# ------------------------------------------------------------------
+
+@app.get("/history", response_class=HTMLResponse)
+def history_page():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>History \u2014 Biotech Diligence Agent</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #7d8590; --blue: #388bfd;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border);
+           padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; flex-shrink: 0; }
+  header h1 { font-size: 1.1rem; font-weight: 700; }
+  .badge-header { font-size: 0.7rem; background: #1f3a5f; color: #79c0ff;
+                  padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .header-right { margin-left: auto; display: flex; gap: 1.25rem; align-items: center; }
+  .header-link { color: var(--muted); font-size: 0.8rem; text-decoration: none; }
+  .header-link:hover { color: var(--text); }
+
+  /* Two-panel layout */
+  .layout { display: flex; flex: 1; overflow: hidden; }
+  .left-panel { width: 340px; flex-shrink: 0; border-right: 1px solid var(--border);
+                display: flex; flex-direction: column; overflow: hidden; }
+  .left-header { padding: 1.25rem 1.25rem 0.75rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .left-header h2 { font-size: 0.85rem; font-weight: 600; color: var(--muted);
+                    text-transform: uppercase; letter-spacing: 0.06em; }
+  .company-list { overflow-y: auto; flex: 1; padding: 0.5rem 0; }
+
+  /* Company row */
+  .company-row { padding: 0.85rem 1.25rem; cursor: pointer; border-bottom: 1px solid #1c2128; }
+  .company-row:hover { background: #1c2128; }
+  .company-row.active { background: #1c2128; border-left: 3px solid var(--blue); padding-left: calc(1.25rem - 3px); }
+  .cr-name { font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 0.25rem; }
+  .cr-meta { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .cr-date { font-size: 0.75rem; color: var(--muted); }
+  .cr-oneliner { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+
+  /* Run sub-list */
+  .run-list { background: #0d1117; border-bottom: 1px solid var(--border); display: none; }
+  .run-list.open { display: block; }
+  .run-row { padding: 0.6rem 1.5rem; cursor: pointer; display: flex; align-items: center; gap: 0.75rem; }
+  .run-row:hover { background: #161b22; }
+  .run-row.active { background: #161b22; }
+  .run-date { font-size: 0.75rem; color: var(--muted); flex-shrink: 0; }
+  .run-oneliner { font-size: 0.75rem; color: #8b949e;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Verdict badges */
+  .vbadge { font-size: 0.65rem; font-weight: 700; padding: 1px 7px; border-radius: 10px;
+            text-transform: uppercase; white-space: nowrap; flex-shrink: 0; }
+  .vbadge.invest { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
+  .vbadge.watch  { background: #1a1500; color: #d29922; border: 1px solid #4a3800; }
+  .vbadge.pass   { background: #2b0a0a; color: #f85149; border: 1px solid #5c1a1a; }
+  .vbadge.na     { background: #1c2128; color: var(--muted); border: 1px solid var(--border); }
+
+  /* Right panel */
+  .right-panel { flex: 1; overflow-y: auto; padding: 2rem; }
+  .empty-state { display: flex; flex-direction: column; align-items: center;
+                 justify-content: center; height: 100%; text-align: center; color: var(--muted); gap: 0.75rem; }
+  .empty-state .icon { font-size: 2.5rem; }
+  .empty-state h2 { font-size: 1.1rem; font-weight: 600; color: var(--text); }
+  .empty-state p { font-size: 0.875rem; max-width: 320px; line-height: 1.6; }
+
+  /* Memo rendering — same as main page */
+  .memo-content { max-width: 800px; }
+  .memo-toolbar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem;
+                  padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+  .memo-company { font-weight: 700; font-size: 1rem; flex: 1; }
+  .toolbar-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+                 padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; }
+  .toolbar-btn:hover { border-color: var(--blue); }
+  .memo-content h1 { font-size: 1.4rem; margin: 1.5rem 0 0.75rem; color: var(--text); }
+  .memo-content h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; color: var(--text);
+                     padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+  .memo-content h3 { font-size: 0.95rem; margin: 1rem 0 0.4rem; color: #79c0ff; }
+  .memo-content p  { font-size: 0.875rem; line-height: 1.7; color: #c9d1d9; margin-bottom: 0.75rem; }
+  .memo-content ul, .memo-content ol { padding-left: 1.25rem; margin-bottom: 0.75rem; }
+  .memo-content li { font-size: 0.875rem; line-height: 1.6; color: #c9d1d9; margin-bottom: 0.2rem; }
+  .memo-content table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; font-size: 0.8rem; }
+  .memo-content th, .memo-content td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  .memo-content th { background: var(--surface); color: var(--text); font-weight: 600; }
+  .memo-content td { color: #c9d1d9; }
+  .memo-content blockquote { border-left: 3px solid var(--blue); padding: 0.5rem 1rem;
+                              margin: 0.75rem 0; background: #1c2128; border-radius: 0 6px 6px 0; }
+  .memo-content code { background: #1c2128; padding: 1px 5px; border-radius: 4px;
+                       font-family: monospace; font-size: 0.82rem; }
+  .memo-content strong { color: var(--text); }
+  .verdict-banner { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem;
+                    border-radius: 10px; margin-bottom: 1.5rem; border: 1px solid; }
+  .verdict-banner.invest { background: #0d2818; border-color: #238636; }
+  .verdict-banner.watch  { background: #1a1500; border-color: #4a3800; }
+  .verdict-banner.pass   { background: #2b0a0a; border-color: #5c1a1a; }
+  .verdict-emoji { font-size: 2rem; }
+  .verdict-text h2 { border: none; padding: 0; margin: 0 0 0.2rem; font-size: 1rem; }
+  .verdict-text.invest h2 { color: #3fb950; }
+  .verdict-text.watch  h2 { color: #d29922; }
+  .verdict-text.pass   h2 { color: #f85149; }
+  .verdict-text p { margin: 0; font-size: 0.8rem; }
+  .verdict-meta { margin-left: auto; display: flex; flex-direction: column; gap: 0.25rem;
+                  font-size: 0.75rem; color: var(--muted); text-align: right; }
+  .loading-state { color: var(--muted); font-size: 0.875rem; padding: 2rem; text-align: center; }
+  .empty-companies { padding: 2rem 1.25rem; text-align: center; color: var(--muted); font-size: 0.875rem; line-height: 1.6; }
+</style>
+</head>
+<body>
+<header>
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#388bfd" stroke-width="2">
+    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+  </svg>
+  <h1>Biotech Diligence Agent</h1>
+  <span class="badge-header">VC-Grade Analysis</span>
+  <div class="header-right">
+    <a href="/" class="header-link">&larr; Back to Agent</a>
+    <a href="/methodology" class="header-link">How It Works</a>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="left-panel">
+    <div class="left-header"><h2>Past Diligences</h2></div>
+    <div class="company-list" id="companyList">
+      <div class="empty-companies">Loading&hellip;</div>
+    </div>
+  </div>
+  <div class="right-panel" id="rightPanel">
+    <div class="empty-state">
+      <div class="icon">&#x1F4CB;</div>
+      <h2>Select a diligence</h2>
+      <p>Choose a company from the left to view the investment memo.</p>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+const VMAP = { INVEST: "invest", WATCH: "watch", PASS: "pass" };
+
+function verdictBadge(v) {
+  const cls = VMAP[v] || "na";
+  return '<span class="vbadge ' + cls + '">' + (v || "N/A") + '</span>';
+}
+
+async function loadCompanies() {
+  const list = document.getElementById("companyList");
+  try {
+    const res = await fetch("/companies/all");
+    const data = await res.json();
+    const companies = data.companies || [];
+    if (!companies.length) {
+      list.innerHTML = '<div class="empty-companies">No diligences run yet.<br>Head back to the agent to get started.</div>';
+      return;
+    }
+    list.innerHTML = companies.map(function(c) {
+      const runsHtml = c.runs.slice().reverse().map(function(r) {
+        return `<div class="run-row" onclick="loadMemo('${c.slug}','${r.run_id}','${escHtml(c.company)}',this)">` +
+          verdictBadge(r.verdict) +
+          '<span class="run-date">' + (r.timestamp||"").slice(0,10) + '</span>' +
+          '<span class="run-oneliner">' + escHtml((r.ic_one_liner||"").slice(0,60)) + '</span>' +
+          '</div>';
+      }).join("");
+      return '<div class="company-row" onclick="toggleCompany(this)">' +
+        '<div class="cr-name">' + escHtml(c.company) + '</div>' +
+        '<div class="cr-meta">' + verdictBadge(c.latest_verdict) +
+        '<span class="cr-date">' + c.latest_date + '</span>' +
+        '<span style="color:var(--muted);font-size:0.72rem">' + c.run_count + ' run' + (c.run_count!==1?"s":"") + '</span></div>' +
+        '<div class="cr-oneliner">' + escHtml((c.latest_one_liner||"").slice(0,80)) + '</div>' +
+        '</div>' +
+        '<div class="run-list">' + runsHtml + '</div>';
+    }).join("");
+  } catch(e) {
+    list.innerHTML = '<div class="empty-companies">Failed to load history.</div>';
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function toggleCompany(row) {
+  const runList = row.nextElementSibling;
+  const isOpen = runList.classList.contains("open");
+  // Close all
+  document.querySelectorAll(".run-list.open").forEach(function(el){ el.classList.remove("open"); });
+  document.querySelectorAll(".company-row.active").forEach(function(el){ el.classList.remove("active"); });
+  if (!isOpen) {
+    runList.classList.add("open");
+    row.classList.add("active");
+    // Auto-load latest run
+    const firstRun = runList.querySelector(".run-row");
+    if (firstRun) firstRun.click();
+  }
+}
+
+let currentMemoText = "";
+let currentMemoCompany = "";
+
+async function loadMemo(slug, runId, company, runRow) {
+  document.querySelectorAll(".run-row.active").forEach(function(el){ el.classList.remove("active"); });
+  runRow.classList.add("active");
+  currentMemoCompany = company;
+  document.getElementById("rightPanel").innerHTML = '<div class="loading-state">Loading memo&hellip;</div>';
+  try {
+    const res = await fetch("/memo/" + encodeURIComponent(slug) + "/" + encodeURIComponent(runId));
+    if (!res.ok) throw new Error("Not found");
+    const data = await res.json();
+    currentMemoText = data.memo;
+    renderMemo(data.company, data.memo);
+  } catch(e) {
+    document.getElementById("rightPanel").innerHTML = '<div class="loading-state">Failed to load memo.</div>';
+  }
+}
+
+function copyMemo() {
+  navigator.clipboard.writeText(currentMemoText).then(function() {
+    var btn = event.target;
+    var orig = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(function(){ btn.textContent = orig; }, 1500);
+  });
+}
+
+function downloadMemo() {
+  var slug = currentMemoCompany.toLowerCase().replace(/\\s+/g, "_");
+  var blob = new Blob([currentMemoText], { type: "text/markdown" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = slug + "_diligence.md";
+  a.click();
+}
+
+loadCompanies();
+</script>
+</body>
+</html>"""
+
+
+# ------------------------------------------------------------------
 # Web UI
 # ------------------------------------------------------------------
 
@@ -699,6 +1001,7 @@ def index():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
+    <a href="/history" class="header-link">History</a>
     <a href="/methodology" class="header-link">How It Works</a>
   </div>
 </header>

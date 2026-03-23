@@ -281,6 +281,368 @@ def get_demo():
 
 
 # ------------------------------------------------------------------
+# Methodology page
+# ------------------------------------------------------------------
+
+@app.get("/methodology", response_class=HTMLResponse)
+def methodology():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diligence Methodology \u2014 Biotech Diligence Agent</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #7d8590; --blue: #388bfd;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 1px solid var(--border);
+           padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+  .badge-header { font-size: 0.7rem; background: #1f3a5f; color: #79c0ff;
+                  padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .header-right { margin-left: auto; }
+  .header-link { color: var(--muted); font-size: 0.8rem; text-decoration: none; }
+  .header-link:hover { color: var(--text); }
+
+  /* Page layout */
+  .page { max-width: 860px; margin: 0 auto; padding: 3rem 2rem 5rem; }
+  .page-title { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .page-subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 3rem; max-width: 600px; line-height: 1.6; }
+
+  /* Timeline */
+  .timeline { position: relative; padding-left: 2.5rem; }
+  .timeline::before {
+    content: ""; position: absolute; left: 0.85rem; top: 0; bottom: 0;
+    width: 2px; background: var(--border);
+  }
+
+  /* Module card */
+  .module-card { position: relative; margin-bottom: 2rem; }
+  .module-card::before {
+    content: ""; position: absolute; left: -2.5rem; top: 1.3rem;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--blue); border: 2px solid var(--bg);
+    box-shadow: 0 0 0 2px var(--blue);
+  }
+  .module-inner { background: var(--surface); border: 1px solid var(--border);
+                  border-radius: 10px; padding: 1.4rem 1.6rem; }
+  .module-inner:hover { border-color: #388bfd55; }
+
+  .module-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 0.75rem; }
+  .module-badge { font-size: 0.7rem; font-weight: 700; background: #1f3a5f;
+                  color: #79c0ff; padding: 3px 10px; border-radius: 10px;
+                  white-space: nowrap; margin-top: 2px; }
+  .module-name { font-size: 1.05rem; font-weight: 600; color: var(--text); }
+  .module-desc { color: var(--muted); font-size: 0.875rem; line-height: 1.6; margin-bottom: 1rem; }
+
+  /* Output tags */
+  .outputs-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+                   letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.4rem; }
+  .outputs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .tag { font-size: 0.72rem; background: #1c2128; border: 1px solid var(--border);
+         color: #8b949e; padding: 2px 9px; border-radius: 20px; }
+
+  /* Verdict section */
+  .verdict-section { margin-top: 3rem; padding: 1.5rem; background: var(--surface);
+                     border: 1px solid var(--border); border-radius: 10px; }
+  .verdict-section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; }
+  .verdict-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1rem; }
+  .verdict-card { padding: 1rem; border-radius: 8px; border: 1px solid; text-align: center; }
+  .verdict-card.invest { background: #0d2818; border-color: #238636; }
+  .verdict-card.watch  { background: #1a1500; border-color: #4a3800; }
+  .verdict-card.pass   { background: #2b0a0a; border-color: #5c1a1a; }
+  .verdict-card .v-emoji { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  .verdict-card .v-label { font-weight: 700; font-size: 0.9rem; }
+  .verdict-card .v-desc  { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; line-height: 1.5; }
+  .invest .v-label { color: #3fb950; }
+  .watch  .v-label { color: #d29922; }
+  .pass   .v-label { color: #f85149; }
+</style>
+</head>
+<body>
+<header>
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#388bfd" stroke-width="2">
+    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+  </svg>
+  <h1>Biotech Diligence Agent</h1>
+  <span class="badge-header">VC-Grade Analysis</span>
+  <div class="header-right">
+    <a href="/" class="header-link">&larr; Back to Agent</a>
+  </div>
+</header>
+
+<div class="page">
+  <h1 class="page-title">Diligence Methodology</h1>
+  <p class="page-subtitle">
+    Every analysis runs 11 sequential modules, each feeding context into the next.
+    The pipeline mirrors how a VC investment committee works &mdash; from a rapid
+    go/no-go filter through to a final conviction verdict.
+  </p>
+
+  <div class="timeline">
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">A</span>
+          <span class="module-name">Rapid Screening</span>
+        </div>
+        <p class="module-desc">
+          A fast 20-minute VC filter. Evaluates science quality, proof of concept, venture scale
+          potential, and existential red flags to decide whether the opportunity warrants deeper
+          diligence. Returns a PASS / SOFT PASS / FAIL verdict before any resources are committed.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Verdict</span><span class="tag">Science quality</span>
+          <span class="tag">Proof of concept</span><span class="tag">Venture scale</span>
+          <span class="tag">Red flags</span><span class="tag">Top concern</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">B</span>
+          <span class="module-name">Scientific &amp; Mechanistic Validation</span>
+        </div>
+        <p class="module-desc">
+          Assesses the soundness of the biological hypothesis and validates the target pathway.
+          Classifies the asset as first-in-class, fast-follow, or me-too, and identifies the
+          critical assumptions that must hold for the science to work.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Biological hypothesis</span><span class="tag">Pathway validation</span>
+          <span class="tag">Asset classification</span><span class="tag">Critical assumptions</span>
+          <span class="tag">Scientific strength score</span><span class="tag">Key insight</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">C</span>
+          <span class="module-name">Data &amp; Evidence Quality</span>
+        </div>
+        <p class="module-desc">
+          Evaluates the rigor and strength of the supporting data package &mdash; trial design,
+          signal quality, biomarker consistency, and reproducibility. Classifies the overall
+          evidence as compelling, emerging, or weak, and flags the most critical data gap.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Most advanced data</span><span class="tag">Trial design assessment</span>
+          <span class="tag">Signal quality</span><span class="tag">Data red flags</span>
+          <span class="tag">Evidence classification</span><span class="tag">Key data gap</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">D</span>
+          <span class="module-name">Development Pathway &amp; Inflection Points</span>
+        </div>
+        <p class="module-desc">
+          Maps the full development roadmap to fundable value inflection points. For each
+          milestone, estimates capital requirements, timeframes, probability of success,
+          and valuation impact &mdash; giving investors a clear picture of the risk/reward
+          at each stage gate.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Current stage</span><span class="tag">Inflection points</span>
+          <span class="tag">Capital to value event</span><span class="tag">Critical path risks</span>
+          <span class="tag">Partnership trigger</span><span class="tag">Development confidence</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">E</span>
+          <span class="module-name">Competitive Landscape &amp; Positioning</span>
+        </div>
+        <p class="module-desc">
+          Identifies direct competitors and mechanism-level competition, then evaluates
+          differentiation across efficacy, safety, convenience, modality, and pricing power.
+          Determines whether the asset has a defensible competitive moat or risks being
+          commoditised.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Direct competitors</span><span class="tag">Differentiation dimensions</span>
+          <span class="tag">Competitive moat</span><span class="tag">Competitive verdict</span>
+          <span class="tag">Biggest threat</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">F</span>
+          <span class="module-name">Market &amp; Commercial Reality</span>
+        </div>
+        <p class="module-desc">
+          Produces a realistic bottom-up market assessment. Sizes the patient population,
+          evaluates standard of care, models pricing and peak revenue scenarios, and
+          identifies the adoption barriers most likely to limit commercial uptake.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Patient population</span><span class="tag">Market sizing</span>
+          <span class="tag">Standard of care</span><span class="tag">Adoption barriers</span>
+          <span class="tag">Commercial risk level</span><span class="tag">Key commercial insight</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">G</span>
+          <span class="module-name">Team &amp; Execution Risk</span>
+        </div>
+        <p class="module-desc">
+          Assesses the quality and experience of the founding team, key executives, and board.
+          Evaluates execution track record, key-man risk, and whether the team has the domain
+          expertise to navigate clinical development and eventual commercialisation.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Founding team</span><span class="tag">Management team</span>
+          <span class="tag">Board &amp; investors</span><span class="tag">Execution track record</span>
+          <span class="tag">Key-man risk</span><span class="tag">Team verdict</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">H</span>
+          <span class="module-name">IP &amp; Regulatory Risk</span>
+        </div>
+        <p class="module-desc">
+          Evaluates patent strength and freedom-to-operate, assesses regulatory pathway
+          clarity (breakthrough designation, orphan status, standard review), and flags
+          any existential IP or regulatory risks that could undermine the investment thesis.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Patent position</span><span class="tag">Freedom to operate</span>
+          <span class="tag">Regulatory pathway</span><span class="tag">Regulatory risks</span>
+          <span class="tag">IP risk level</span><span class="tag">Key IP insight</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">I</span>
+          <span class="module-name">Risk Decomposition</span>
+        </div>
+        <p class="module-desc">
+          Decomposes all investment risk into five categories &mdash; scientific, clinical,
+          regulatory, commercial, and financing &mdash; scoring each with key drivers and
+          mitigants. Synthesises these into an overall Probability of Technical and
+          Commercial Success (PTCS).
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Scientific risk score</span><span class="tag">Clinical risk score</span>
+          <span class="tag">Regulatory risk score</span><span class="tag">Commercial risk score</span>
+          <span class="tag">Financing risk score</span><span class="tag">Overall PTCS</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge">J</span>
+          <span class="module-name">Investment Framing</span>
+        </div>
+        <p class="module-desc">
+          Frames the investment opportunity for an IC presentation. Articulates bull, base,
+          and bear cases with return multiples, models realistic exit scenarios, and assesses
+          strategic value and fund-returner potential.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Bull / base / bear cases</span><span class="tag">Exit scenarios</span>
+          <span class="tag">Return multiples</span><span class="tag">Strategic value</span>
+          <span class="tag">Fund-returner potential</span><span class="tag">Key investment insight</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-inner">
+        <div class="module-header">
+          <span class="module-badge" style="background:#1a3a1a;color:#3fb950;">K</span>
+          <span class="module-name">Decision Engine</span>
+        </div>
+        <p class="module-desc">
+          Synthesises all prior modules into a decisive investment verdict. Produces
+          an IC-ready one-liner, the top 3 reasons to invest, the top 3 risks, and
+          (where relevant) the conditions under which a PASS could become a WATCH,
+          or a WATCH an INVEST.
+        </p>
+        <div class="outputs-label">Key outputs</div>
+        <div class="outputs">
+          <span class="tag">Verdict (INVEST / WATCH / PASS)</span>
+          <span class="tag">Confidence</span><span class="tag">Top 3 reasons</span>
+          <span class="tag">Top 3 risks</span><span class="tag">Watch triggers</span>
+          <span class="tag">Entry conditions</span><span class="tag">IC one-liner</span>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /timeline -->
+
+  <div class="verdict-section">
+    <h2>Final Verdicts</h2>
+    <p style="color:var(--muted);font-size:0.875rem;">Module K produces one of three verdicts based on the full diligence synthesis.</p>
+    <div class="verdict-grid">
+      <div class="verdict-card invest">
+        <div class="v-emoji">&#x2705;</div>
+        <div class="v-label">INVEST</div>
+        <div class="v-desc">Strong conviction. Science, data, team, and market align. Recommend proceeding to term sheet.</div>
+      </div>
+      <div class="verdict-card watch">
+        <div class="v-emoji">&#x26A0;&#xFE0F;</div>
+        <div class="v-label">WATCH</div>
+        <div class="v-desc">Interesting but not yet actionable. Clear triggers identified that would upgrade to INVEST.</div>
+      </div>
+      <div class="verdict-card pass">
+        <div class="v-emoji">&#x274C;</div>
+        <div class="v-label">PASS</div>
+        <div class="v-desc">Insufficient conviction at this time. Fundamental concerns outweigh the opportunity.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>"""
+
+
+# ------------------------------------------------------------------
 # Web UI
 # ------------------------------------------------------------------
 
@@ -432,6 +794,7 @@ def index():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
+    <a href="/methodology" class="header-link">How It Works</a>
   </div>
 </header>
 

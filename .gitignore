@@ -1,0 +1,27 @@
+# Environment — never commit API keys
+.env
+
+# Diligence state (local run history)
+.diligence_state/
+
+# Generated memos (optional — remove this line if you want memos tracked)
+memos/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/settings.local.json

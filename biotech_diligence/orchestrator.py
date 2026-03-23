@@ -75,6 +75,7 @@ class DiligenceOrchestrator:
         company: str,
         inputs: Optional[str] = None,
         output_format: str = "markdown",
+        progress_callback=None,
     ) -> str:
         """
         Run all 11 modules in sequence and return a formatted memo.
@@ -95,14 +96,18 @@ class DiligenceOrchestrator:
         context = {"company": company, "inputs": inputs or ""}
         results = {}
 
-        for module_name, module_cls in MODULE_PIPELINE:
+        total = len(MODULE_PIPELINE)
+        for i, (module_name, module_cls) in enumerate(MODULE_PIPELINE, 1):
             self._log(f"Running module: {module_cls.MODULE_LABEL}...")
+            if progress_callback:
+                progress_callback({"step": i, "total": total, "module": module_cls.MODULE_LABEL, "status": "running"})
             module = module_cls(self.client, self.model)
             result = module.run(context)
             results[module_name] = result
-            # Feed result back into context so downstream modules can use it
             context[module_name] = result
             self._log(f"  → Done")
+            if progress_callback:
+                progress_callback({"step": i, "total": total, "module": module_cls.MODULE_LABEL, "status": "done"})
 
         if self.save_state:
             run_id = self.state_mgr.save_run(company, results)

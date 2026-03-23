@@ -356,9 +356,10 @@ def methodology():
   header h1 { font-size: 1.1rem; font-weight: 700; color: var(--text); }
   .badge-header { font-size: 0.7rem; background: #1f3a5f; color: #79c0ff;
                   padding: 2px 8px; border-radius: 10px; font-weight: 600; }
-  .header-right { margin-left: auto; }
+  .header-right { margin-left: auto; display: flex; gap: 1rem; align-items: center; }
   .header-link { color: var(--muted); font-size: 0.8rem; text-decoration: none; }
   .header-link:hover { color: var(--text); }
+  .nav-sep { color: var(--border); font-size: 0.8rem; user-select: none; }
 
   /* Page layout */
   .page { max-width: 860px; margin: 0 auto; padding: 3rem 2rem 5rem; }
@@ -422,6 +423,7 @@ def methodology():
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
     <a href="/history" class="header-link">History</a>
+    <span class="nav-sep">|</span>
     <a href="/" class="header-link">&larr; Back to Agent</a>
   </div>
 </header>
@@ -627,9 +629,10 @@ def history_page():
   header h1 { font-size: 1.1rem; font-weight: 700; }
   .badge-header { font-size: 0.7rem; background: #1f3a5f; color: #79c0ff;
                   padding: 2px 8px; border-radius: 10px; font-weight: 600; }
-  .header-right { margin-left: auto; display: flex; gap: 1.25rem; align-items: center; }
+  .header-right { margin-left: auto; display: flex; gap: 1rem; align-items: center; }
   .header-link { color: var(--muted); font-size: 0.8rem; text-decoration: none; }
   .header-link:hover { color: var(--text); }
+  .nav-sep { color: var(--border); font-size: 0.8rem; user-select: none; }
 
   /* Two-panel layout */
   .layout { display: flex; flex: 1; overflow: hidden; }
@@ -726,6 +729,7 @@ def history_page():
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
     <a href="/" class="header-link">&larr; Back to Agent</a>
+    <span class="nav-sep">|</span>
     <a href="/methodology" class="header-link">How It Works</a>
   </div>
 </header>
@@ -879,9 +883,10 @@ def index():
   header h1 { font-size: 1.1rem; font-weight: 700; color: var(--text); }
   .badge-header { font-size: 0.7rem; background: #1f3a5f; color: #79c0ff;
                   padding: 2px 8px; border-radius: 10px; font-weight: 600; }
-  .header-right { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+  .header-right { margin-left: auto; display: flex; gap: 1rem; align-items: center; }
   .header-link { color: var(--muted); font-size: 0.8rem; text-decoration: none; }
   .header-link:hover { color: var(--text); }
+  .nav-sep { color: var(--border); font-size: 0.8rem; user-select: none; }
 
   /* ── Layout ── */
   .layout { display: grid; grid-template-columns: 340px 1fr; height: calc(100vh - 57px); overflow: hidden; }
@@ -1002,6 +1007,7 @@ def index():
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
     <a href="/history" class="header-link">History</a>
+    <span class="nav-sep">|</span>
     <a href="/methodology" class="header-link">How It Works</a>
   </div>
 </header>

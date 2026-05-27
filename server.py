@@ -1082,7 +1082,7 @@ def index():
     </div>
     <div>
       <label>Raw inputs <span style="text-transform:none;font-weight:400">(optional)</span></label>
-      <textarea id="inputs" placeholder="Paste any text context: trial readouts, press releases, pipeline summaries, key data points…"></textarea>
+      <textarea id="inputs" placeholder="Paste any relevant context: clinical trial readouts, pipeline overview, mechanism of action, IP / patent summary, leadership bios, competitive positioning, press releases, financial highlights, meeting notes…"></textarea>
     </div>
     <div>
       <label>Attachments <span style="text-transform:none;font-weight:400">(optional)</span></label>
@@ -1213,11 +1213,58 @@ _RAISE_VERB = _re.compile(
 )
 # Phrases that mark a historical/retrospective reference — not a current raise
 _HISTORICAL = _re.compile(
-    r'\bafter\s+its\b|\bfollowing\s+its\b|\bbuilding\s+on\b'
-    r'|\blast\s+year\b|\bin\s+20(?:2[0-3])\b|\bsince\s+its\b'
-    r'|\bwhat\s+\w+\s+is\s+build\w+\b|\bpost[- ]\$',
+    r'\bafter\s+(its|their|the)\b|\bfollowing\s+(its|their|the)\b|\bbuilding\s+on\b'
+    r'|\blast\s+year\b|\bin\s+20(?:2[0-4])\b|\bsince\s+its\b'
+    r'|\bwhat\s+\w+\s+is\s+build\w+\b|\bpost[- ]\$'
+    r'|\bhad\s+raised\b|\bpreviously\s+raised\b|\bwhich\s+raised\b'
+    r'|\bwho\s+raised\b|\bthat\s+raised\b|\bonce\s+raised\b'
+    r'|\bcompleted\s+(?:a\s+)?\$|\bclosed\s+(?:a\s+)?\$',
     _re.IGNORECASE,
 )
+
+
+def _pub_year(date_str: str) -> int:
+    """Extract 4-digit year from an RSS pubDate string (e.g. 'Mon, 26 May 2026 …')."""
+    if not date_str:
+        return 0
+    m = _re.search(r'\b(20\d{2})\b', date_str)
+    return int(m.group(1)) if m else 0
+
+
+def _is_stale_reference(title: str, snippet: str, pub_date_str: str) -> bool:
+    """
+    Return True when the article is referencing a *past* fundraise rather than
+    announcing a new one.
+
+    Strategy:
+    1. Check known retrospective phrases in title + first 300 chars of snippet.
+    2. Year-staleness check: if the article explicitly associates a dollar amount
+       or round-type with a year older than the article's own publication year,
+       the article is a retrospective mention, not a fresh announcement.
+
+    Example caught: March-2026 article that says "Xaira Therapeutics, which raised
+    $1.2B in 2024, begins Phase I trials" → year 2024 < pub_year 2026 → stale.
+    """
+    full = title + " " + snippet[:300]
+
+    # Hard phrase patterns
+    if _HISTORICAL.search(full):
+        return True
+
+    # Year-staleness check
+    pub_yr = _pub_year(pub_date_str)
+    if pub_yr >= 2024:
+        # Find every "in YYYY" or "from YYYY" or "during YYYY" near the fundraise
+        for ym in _re.finditer(r'\b(?:in|from|during|back\s+in)\s+(20\d{2})\b', full, _re.IGNORECASE):
+            y = int(ym.group(1))
+            if y >= pub_yr:
+                continue  # same year — could be a real announcement
+            # Check if a dollar amount or round label appears within ±120 chars
+            ctx = full[max(0, ym.start() - 120): ym.end() + 120]
+            if _AMT_RE.search(ctx) or _ROUND_PAT.search(ctx):
+                return True
+
+    return False
 
 
 def _parse_amount(text: str) -> str:
@@ -1268,14 +1315,17 @@ def _extract_fundraises(articles: list) -> list:
     """Pure regex extraction — zero LLM tokens consumed."""
     results = []
     for a in articles:
-        title = a.get("title", "")
+        title   = a.get("title", "")
         snippet = _re.sub(r'<[^>]+>', '', a.get("summary", ""))
+        pub_date = a.get("date", "")
         full_text = title + " " + snippet[:300]
 
-        # Must have a raise verb and must NOT be a retrospective reference
+        # Must have an active raise verb in the headline
         if not _RAISE_VERB.search(title):
             continue
-        if _HISTORICAL.search(title):
+
+        # Reject retrospective references and stale year mismatches
+        if _is_stale_reference(title, snippet, pub_date):
             continue
 
         company = _parse_company(title)

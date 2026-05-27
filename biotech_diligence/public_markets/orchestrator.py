@@ -630,20 +630,40 @@ Return ONLY this JSON:
     # ── M6: IP & Exclusivity ──────────────────────────────────────────────────
 
     def _m06_ip(self, data: dict, ctx: dict, extra: str) -> dict:
-        patents  = data.get("patents", {}).get("patents", [])
-        fda_prod = data.get("fda", {}).get("approved_products", [])
-        pipeline = ctx.get("m02_pipeline", {}).get("programmes", [])
+        patents_data = data.get("patents", {})
+        patents      = patents_data.get("patents", [])
+        patents_avail = patents_data.get("_data_available", False)
+        patents_note  = patents_data.get("_note", "")
+        fda_prod  = data.get("fda", {}).get("approved_products", [])
+        pipeline  = ctx.get("m02_pipeline", {}).get("programmes", [])
+        m1        = ctx.get("m01_identity", {})
+        modality  = m1.get("modality_flag", "unknown")
+
+        # Build a patent data status block for the prompt
+        if patents_avail and patents:
+            patent_block = (
+                f"USPTO PatentsView results (fetched {patents_data.get('_fetched_at', 'unknown')}):\n"
+                f"{json.dumps(patents[:15], indent=2)}\n"
+                f"Total patents found: {patents_data.get('count', 0)}"
+            )
+        else:
+            patent_block = (
+                f"USPTO PatentsView: DATA UNAVAILABLE\n"
+                f"Reason: {patents_note or 'PatentsView API is currently unreachable.'}\n"
+                f"NOTE: Do NOT infer that the company has no patents. Use the FDA approval "
+                f"dates and modality below to estimate regulatory exclusivity instead.\n"
+                f"For independent patent research: https://patentsview.org or https://patents.google.com"
+            )
 
         prompt = f"""
 TASK: MODULE 6 — IP & EXCLUSIVITY
 
 Company: {data['_company']} ({data['_ticker']})
+Primary modality: {modality}
 
-USPTO PatentsView results (fetched {data['patents'].get('_fetched_at', 'unknown')}):
-{json.dumps(patents[:15], indent=2)}
-Total patents found: {data['patents'].get('count', 0)}
+{patent_block}
 
-FDA-approved products (for Orange Book cross-reference):
+FDA-approved products (for regulatory exclusivity analysis):
 {json.dumps(fda_prod[:5], indent=2)}
 
 Pipeline summary:
@@ -653,44 +673,53 @@ Pipeline summary:
 Extra context: {extra or 'none'}
 
 INSTRUCTIONS:
-1. Summarise the patent portfolio breadth (count, approximate date range of patents).
-2. For any approved product: flag loss-of-exclusivity risk.
-   Standard drug patent life is 20 years from filing; typical marketed exclusivity
-   is 12–15 years after approval date. Flag if any approved asset appears to face
-   LOE within 5 years from today.
-3. Identify whether the pipeline IP appears to be composition-of-matter
-   (strong protection) vs method-of-use (weaker, more easily challenged).
-4. Flag freedom-to-operate risks if any competitor patent in the same mechanism
-   class appears likely (based on indication / mechanism names).
-5. IMPORTANT: Full Orange Book patent listings require the paid Drugs@FDA web
-   interface. Flag this as a data gap if not available.
+1. Patent portfolio: If USPTO data is available, summarise breadth and date range.
+   If not available, state this clearly as a data gap — do NOT assume zero patents.
+2. Regulatory exclusivity for approved products:
+   - For biologics / large molecules / mRNA: FDA grants 12 years regulatory exclusivity
+     from BLA approval date (Biologics Price Competition and Innovation Act).
+   - For small molecules: 5 years NCE exclusivity + up to 20-year patent protection.
+   - For each approved product with a known approval date, estimate the exclusivity
+     expiry and flag any LOE risk within 5 years from today (2026).
+3. If no approval dates are available in the data, flag that explicitly.
+4. IP type: Based on the modality and mechanism, assess whether the IP estate is
+   likely composition-of-matter (strongest), method-of-use, or formulation/delivery.
+   For mRNA / gene therapy / cell therapy: delivery system patents (LNPs, vectors)
+   are often the key IP battleground — flag this.
+5. Freedom-to-operate: flag any known platform-level IP disputes in the same
+   mechanism class (e.g. mRNA-LNP IP landscape disputes).
+6. IMPORTANT: Full Orange Book patent listings require the paid Drugs@FDA web
+   interface or manual lookup. Flag this as a data gap.
 
 Return ONLY this JSON:
 {{
-  "patent_count": {data['patents'].get('count', 0)},
-  "patent_date_range": {{"earliest": "YYYY", "latest": "YYYY"}} ,
-  "portfolio_assessment": "1–2 sentences",
+  "patent_data_available": {"true" if patents_avail and patents else "false"},
+  "patent_count": {patents_data.get('count', 0) if patents_avail else '"unavailable — see data_gaps"'},
+  "patent_date_range": {{"earliest": "YYYY or null", "latest": "YYYY or null"}},
+  "portfolio_assessment": "what is known or unknown about the patent portfolio",
   "approved_asset_loe": [
     {{
-      "asset":      "name",
-      "approval_date": "YYYY",
-      "estimated_loe": "YYYY or null",
-      "flag":        "null or 'LOE within 5 years'"
+      "asset":           "name",
+      "approval_date":   "YYYY-MM or null",
+      "exclusivity_type":"Biologic (12yr) | NCE (5yr) | unknown",
+      "estimated_loe":   "YYYY or null",
+      "flag":            "null or 'LOE within 5 years' or 'LOE in YYYY'"
     }}
   ],
-  "ip_type_assessment": "composition-of-matter | method-of-use | mixed | unknown",
-  "freedom_to_operate_risks": ["risks or 'none identified'"],
-  "data_gaps": ["e.g. Orange Book listing requires manual lookup"],
+  "ip_type_assessment": "composition-of-matter | method-of-use | delivery-system | mixed | unknown",
+  "freedom_to_operate_risks": ["known or likely risks, or 'none identified from available data'"],
+  "data_gaps": ["list specific gaps — e.g. Orange Book, patent filing dates, USPTO unavailable"],
   "nulls_flagged": [],
   "_confidence": "High | Medium | Low",
-  "_sources": ["USPTO PatentsView", "openFDA"],
-  "_data_ts": "{data['patents'].get('_fetched_at', 'unknown')}"
+  "_sources": ["openFDA (regulatory exclusivity)", "USPTO PatentsView (if available)"],
+  "_data_ts": "{patents_data.get('_fetched_at', 'unknown')}"
 }}"""
 
         raw    = self._call(prompt, max_tokens=1800)
         result = self._parse(raw)
+        # Confidence based on FDA product data (can still give Medium even without patents)
         result.setdefault("_confidence",
-                          self._confidence([bool(patents), bool(fda_prod)]))
+                          self._confidence([bool(fda_prod), bool(pipeline)]))
         return result
 
     # ── M7: Financial Health ──────────────────────────────────────────────────

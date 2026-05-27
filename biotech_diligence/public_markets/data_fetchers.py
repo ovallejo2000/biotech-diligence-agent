@@ -6,7 +6,7 @@ Sources used (all free, no API keys required):
   - ClinicalTrials.gov v2 API                      (clinicaltrials.gov)
   - openFDA drug label / NDA API                   (api.fda.gov)
   - PubMed E-utilities                             (eutils.ncbi.nlm.nih.gov)
-  - USPTO PatentsView                              (search.rpatentsview.org)
+  - USPTO PatentsView                              (api.patentsview.org)
 
 Guardrails implemented here:
   - Every result includes _fetched_at (UTC ISO-8601 timestamp).
@@ -295,72 +295,157 @@ def get_financial_metrics(cik: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helpers: clean company name for fuzzy API searches
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LEGAL_SUFFIX = re.compile(
+    r',?\s*(Inc\.?|LLC\.?|Corp\.?|Ltd\.?|PLC\.?|SE|NV|AG|GmbH|L\.P\.?|LP)$',
+    re.IGNORECASE,
+)
+
+def _name_variants(full_name: str) -> list[str]:
+    """
+    Return a ranked list of name variants to try when searching external APIs.
+    e.g. "Moderna, Inc." → ["Moderna, Inc.", "Moderna Inc", "Moderna"]
+    """
+    stripped = _LEGAL_SUFFIX.sub("", full_name).strip().rstrip(",").strip()
+    variants = [full_name]
+    if stripped != full_name:
+        variants.append(stripped)
+    # Also try first word only for single-token searches
+    first_word = stripped.split()[0] if stripped else full_name.split()[0]
+    if first_word not in variants:
+        variants.append(first_word)
+    return variants
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 4.  ClinicalTrials.gov v2
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_clinical_trials(company_name: str, max_results: int = 50) -> dict:
-    """
-    Fetch active and completed clinical trials for a sponsor.
-    Returns list of trials with phase, status, conditions, dates, enrollment.
-    """
-    params = urllib.parse.urlencode({
-        "query.spons":  company_name,
-        "pageSize":     max_results,
-        "format":       "json",
-    })
-    url = f"https://clinicaltrials.gov/api/v2/studies?{params}"
-    data = _fetch_json(url, timeout=25)
+def _parse_ct_study(study: dict, company_name: str) -> dict:
+    """Parse a single ClinicalTrials.gov v2 study into our standard dict."""
+    ps      = study.get("protocolSection", {})
+    id_mod  = ps.get("identificationModule", {})
+    st_mod  = ps.get("statusModule", {})
+    des_mod = ps.get("designModule", {})
+    con_mod = ps.get("conditionsModule", {})
+    iv_mod  = ps.get("armsInterventionsModule", {})
+    # NOTE: CT.gov v2 uses "sponsorCollaboratorsModule" (no trailing 's')
+    sp_mod  = ps.get("sponsorCollaboratorsModule", {}) or ps.get("sponsorsCollaboratorsModule", {})
+    oc_mod  = ps.get("outcomesModule", {})
 
-    if not data.get("_data_available", False):
-        return {"trials": [], "_error": data.get("_error"),
-                "_fetched_at": _now(), "_data_available": False}
+    phases = des_mod.get("phases", [])
+    ivs    = [iv.get("name") for iv in iv_mod.get("interventions", []) if iv.get("name")]
+    prim   = oc_mod.get("primaryOutcomes", [])
 
-    trials = []
-    for study in data.get("studies", []):
-        ps = study.get("protocolSection", {})
-        id_mod  = ps.get("identificationModule", {})
-        st_mod  = ps.get("statusModule", {})
-        des_mod = ps.get("designModule", {})
-        con_mod = ps.get("conditionsModule", {})
-        iv_mod  = ps.get("armsInterventionsModule", {})
-        sp_mod  = ps.get("sponsorsCollaboratorsModule", {})
-        oc_mod  = ps.get("outcomesModule", {})
-
-        phases = des_mod.get("phases", [])
-        ivs    = [iv.get("name") for iv in iv_mod.get("interventions", [])
-                  if iv.get("name")]
-
-        # Primary outcome
-        prim = oc_mod.get("primaryOutcomes", [])
-        primary_endpoint = prim[0].get("measure") if prim else None
-
-        trials.append({
-            "nct_id":                  id_mod.get("nctId"),
-            "title":                   id_mod.get("briefTitle"),
-            "status":                  st_mod.get("overallStatus"),
-            "phase":                   phases[0] if phases else "Unknown",
-            "conditions":              con_mod.get("conditions", [])[:3],
-            "interventions":           ivs[:3],
-            "primary_endpoint":        primary_endpoint,
-            "enrollment":              des_mod.get("enrollmentInfo", {}).get("count"),
-            "start_date":              st_mod.get("startDateStruct", {}).get("date"),
-            "primary_completion_date": st_mod.get("primaryCompletionDateStruct", {}).get("date"),
-            "estimated_completion":    st_mod.get("completionDateStruct", {}).get("date"),
-            "sponsor":                 sp_mod.get("leadSponsor", {}).get("name"),
-            "is_sponsor":              (
-                (sp_mod.get("leadSponsor", {}).get("name") or "").lower()
-                in company_name.lower()
-                or company_name.lower()
-                in (sp_mod.get("leadSponsor", {}).get("name") or "").lower()
-            ),
-        })
+    sponsor_name = sp_mod.get("leadSponsor", {}).get("name") or ""
+    co_low       = company_name.lower()
+    sp_low       = sponsor_name.lower()
 
     return {
-        "trials":          trials,
-        "total_found":     data.get("totalCount", len(trials)),
-        "_fetched_at":     _now(),
-        "_data_available": bool(trials),
-        "_source":         "ClinicalTrials.gov v2 API",
+        "nct_id":                  id_mod.get("nctId"),
+        "title":                   id_mod.get("briefTitle"),
+        "status":                  st_mod.get("overallStatus"),
+        "phase":                   phases[0] if phases else "Unknown",
+        "conditions":              con_mod.get("conditions", [])[:3],
+        "interventions":           ivs[:3],
+        "primary_endpoint":        prim[0].get("measure") if prim else None,
+        "enrollment":              des_mod.get("enrollmentInfo", {}).get("count"),
+        "start_date":              st_mod.get("startDateStruct", {}).get("date"),
+        "primary_completion_date": st_mod.get("primaryCompletionDateStruct", {}).get("date"),
+        "estimated_completion":    st_mod.get("completionDateStruct", {}).get("date"),
+        "sponsor":                 sponsor_name or None,
+        "is_lead_sponsor":         bool(co_low in sp_low or sp_low in co_low),
+    }
+
+
+def get_clinical_trials(company_name: str, max_results: int = 50) -> dict:
+    """
+    Fetch clinical trials for a sponsor from ClinicalTrials.gov v2.
+
+    Search strategy:
+    1. Try query.spons with each name variant (fastest, most precise).
+       CT.gov performs exact token matching on this field — "Moderna" will
+       NOT match "ModernaTX", so we try the first-word variant last.
+    2. If query.spons returns fewer than 5 trials for all variants, fall
+       back to query.term (full-text) with the base name and keep only
+       trials where the company is the lead sponsor or collaborator.
+       This catches companies whose CT.gov sponsor name differs from their
+       EDGAR legal name (e.g. "Moderna, Inc." → "ModernaTX, Inc.").
+    """
+    variants = _name_variants(company_name)
+    base_name = variants[-1].lower()   # first-word, e.g. "moderna"
+
+    # ── Phase 1: query.spons exact-match tries ────────────────────────────
+    best_studies: list = []
+    best_variant = company_name
+    best_method   = "query.spons"
+
+    for variant in variants:
+        params = urllib.parse.urlencode({
+            "query.spons": variant,
+            "pageSize":    max_results,
+            "format":      "json",
+        })
+        data = _fetch_json(
+            f"https://clinicaltrials.gov/api/v2/studies?{params}", timeout=25
+        )
+        studies = data.get("studies", [])
+        if len(studies) > len(best_studies):
+            best_studies = studies
+            best_variant = variant
+        if len(best_studies) >= max_results:
+            break
+
+    # ── Phase 2: query.term fallback when spons-search is sparse (<5) ─────
+    if len(best_studies) < 5:
+        params = urllib.parse.urlencode({
+            "query.term": base_name,
+            "pageSize":   max_results,
+            "format":     "json",
+        })
+        data = _fetch_json(
+            f"https://clinicaltrials.gov/api/v2/studies?{params}", timeout=25
+        )
+        term_studies = data.get("studies", [])
+        # Keep only studies where our company appears as lead sponsor/collaborator
+        filtered = []
+        for s in term_studies:
+            sp_mod = (s.get("protocolSection", {})
+                       .get("sponsorCollaboratorsModule", {})
+                       or s.get("protocolSection", {})
+                          .get("sponsorsCollaboratorsModule", {}))
+            lead_name = (sp_mod.get("leadSponsor", {}).get("name") or "").lower()
+            collabs   = [
+                (c.get("name") or "").lower()
+                for c in sp_mod.get("collaborators", [])
+            ]
+            if base_name in lead_name or any(base_name in c for c in collabs):
+                filtered.append(s)
+
+        if len(filtered) > len(best_studies):
+            best_studies = filtered
+            best_variant = f"{base_name} (full-text fallback)"
+            best_method  = "query.term"
+
+    if not best_studies:
+        return {
+            "trials": [], "total_found": 0,
+            "_fetched_at": _now(), "_data_available": False,
+            "_source": "ClinicalTrials.gov v2 API",
+            "_note": f"No trials found for any name variant of '{company_name}'",
+        }
+
+    trials = [_parse_ct_study(s, best_variant) for s in best_studies]
+    return {
+        "trials":           trials,
+        "total_found":      len(trials),
+        "search_name_used": best_variant,
+        "search_method":    best_method,
+        "_fetched_at":      _now(),
+        "_data_available":  True,
+        "_source":          "ClinicalTrials.gov v2 API",
     }
 
 
@@ -370,38 +455,114 @@ def get_clinical_trials(company_name: str, max_results: int = 50) -> dict:
 
 def get_fda_approvals(company_name: str) -> dict:
     """
-    Search openFDA Drugs@FDA for approved products by this company.
-    """
-    encoded = urllib.parse.quote(f'"{company_name}"')
-    # Try drugsfda endpoint (NDA/BLA records)
-    url = (f"https://api.fda.gov/drug/drugsfda.json?"
-           f"search=sponsor_name:{encoded}&limit=20")
-    data = _fetch_json(url, timeout=20)
+    Search openFDA for approved drug products by this company.
 
-    products = []
-    if data.get("_data_available") and "results" in data:
-        for r in data["results"][:15]:
-            for p in r.get("products", []):
-                products.append({
-                    "brand_name":        p.get("brand_name"),
-                    "active_ingredient": (p.get("active_ingredients") or [{}])[0].get("name"),
-                    "dosage_form":       p.get("dosage_form"),
-                    "marketing_status":  p.get("marketing_status"),
-                    "approval_date":     p.get("approval_date"),
-                    "application_number": r.get("application_number"),
-                    "sponsor":           r.get("sponsor_name"),
-                })
+    Strategy (in priority order):
+    1. openFDA NDC directory — labeler_name search with base company name.
+       NDC uses single-word Lucene matching; multi-word names work if the
+       first distinctive word is used.  Returns finished marketed products.
+    2. openFDA Drugs@FDA (drugsfda) — sponsor_name search with base name.
+       Single-word queries work; quoted multi-word queries return 404.
+    Deduplicates by brand name across both sources.
+    """
+    variants   = _name_variants(company_name)
+    seen_brands: set = set()
+    products:   list = []
+    sources_hit: list = []
+
+    # openFDA Lucene queries require single clean tokens — multi-word variants
+    # like "Moderna, Inc." get mis-parsed (comma terminates the field; space
+    # is treated as boolean AND against ALL fields, yielding false positives).
+    # We therefore search with ONLY the first-word (base) variant and then
+    # post-filter to ensure the returned labeler_name actually contains our
+    # base company name.
+    base_name = variants[-1].lower()   # e.g. "moderna"
+    ndc_searched = False
+    fda_searched  = False
+
+    for variant in variants:
+        if len(products) >= 15:
+            break
+
+        # ── NDC directory (best for marketed / finished products) ──────────
+        # Only search with a SINGLE-WORD, clean variant to avoid Lucene
+        # mis-parsing caused by spaces or commas in multi-word names.
+        if " " not in variant and "," not in variant and not ndc_searched:
+            ndc_searched = True
+            ndc_url = (f"https://api.fda.gov/drug/ndc.json?"
+                       f"search=labeler_name:{urllib.parse.quote(variant)}"
+                       f"&limit=25")
+            ndc = _fetch_json(ndc_url, timeout=20)
+            if ndc.get("_data_available") and ndc.get("results"):
+                sources_hit.append("openFDA NDC")
+                for r in ndc["results"]:
+                    # Verify result actually belongs to our company (post-filter)
+                    labeler = (r.get("labeler_name") or "").lower()
+                    if base_name not in labeler:
+                        continue
+                    brand = (r.get("brand_name") or r.get("generic_name") or "").strip()
+                    if not brand or brand.lower() in seen_brands:
+                        continue
+                    # Only include finished, human prescription/OTC products
+                    if not r.get("finished", True):
+                        continue
+                    seen_brands.add(brand.lower())
+                    ings = r.get("active_ingredients") or []
+                    products.append({
+                        "brand_name":        brand,
+                        "active_ingredient": ings[0].get("name") if ings else None,
+                        "dosage_form":       r.get("dosage_form"),
+                        "route":             (r.get("route") or [None])[0],
+                        "marketing_status":  r.get("marketing_category"),
+                        "labeler_name":      r.get("labeler_name"),
+                        "product_type":      r.get("product_type"),
+                        "approval_date":     None,   # NDC doesn't carry this
+                        "application_number":r.get("application_number"),
+                        "source":            "NDC",
+                    })
+
+        # ── Drugs@FDA (NDA/BLA records) ───────────────────────────────────
+        # Same single-word constraint; also post-filter by sponsor_name.
+        if " " not in variant and "," not in variant and not fda_searched:
+            fda_searched = True
+            fda_url = (f"https://api.fda.gov/drug/drugsfda.json?"
+                       f"search=sponsor_name:{urllib.parse.quote(variant)}&limit=15")
+            fda = _fetch_json(fda_url, timeout=20)
+            if fda.get("_data_available") and fda.get("results"):
+                sources_hit.append("openFDA Drugs@FDA")
+                for r in fda["results"][:10]:
+                    sponsor = (r.get("sponsor_name") or "").lower()
+                    if base_name not in sponsor:
+                        continue   # post-filter false positives
+                    for p in r.get("products", []):
+                        brand = (p.get("brand_name") or "").strip()
+                        if not brand or brand.lower() in seen_brands:
+                            continue
+                        seen_brands.add(brand.lower())
+                        ings = p.get("active_ingredients") or []
+                        products.append({
+                            "brand_name":         brand,
+                            "active_ingredient":  ings[0].get("name") if ings else None,
+                            "dosage_form":        p.get("dosage_form"),
+                            "route":              None,
+                            "marketing_status":   p.get("marketing_status"),
+                            "labeler_name":       r.get("sponsor_name"),
+                            "product_type":       None,
+                            "approval_date":      p.get("approval_date"),
+                            "application_number": r.get("application_number"),
+                            "source":             "Drugs@FDA",
+                        })
 
     return {
-        "approved_products":  products,
-        "count":              len(products),
-        "_fetched_at":        _now(),
-        "_data_available":    bool(products),
-        "_source":            "openFDA Drugs@FDA API",
-        "_note":              (
+        "approved_products": products,
+        "count":             len(products),
+        "_fetched_at":       _now(),
+        "_data_available":   bool(products),
+        "_source":           " + ".join(dict.fromkeys(sources_hit)) or "openFDA",
+        "_note":             (
             None if products else
-            "No approved products found via openFDA. "
-            "Company may be pre-commercial or name may differ from sponsor record."
+            f"No approved products found. Company may be pre-commercial, "
+            f"or name variants tried ({variants}) may not match FDA sponsor records."
         ),
     }
 
@@ -577,46 +738,64 @@ def get_publications(company_name: str, max_results: int = 10) -> dict:
 def get_patents(company_name: str, max_results: int = 20) -> dict:
     """
     Search USPTO PatentsView for patents assigned to this company.
+
+    Tries multiple name variants against the PatentsView legacy GET API
+    (api.patentsview.org/patents/query).  If all calls fail or return
+    empty results, degrades gracefully with a clear note — never raises.
+
+    NOTE: The previous endpoint (search.rpatentsview.org) was
+    decommissioned.  The legacy API at api.patentsview.org/patents/query
+    accepts JSON-encoded query/field/options as GET query-string params
+    and returns {"patents": [...], "total_patent_count": N}.
     """
-    body = json.dumps({
-        "q": {"_contains": {"assignee_organization": company_name}},
-        "f": ["patent_number", "patent_title", "patent_date",
-              "assignee_organization"],
-        "o": {"per_page": max_results, "sort_by": "patent_date",
-              "sort_order": "desc"},
-    }).encode()
+    variants = _name_variants(company_name)
 
-    data = _fetch_json(
-        "https://search.rpatentsview.org/api/v1/patent/",
-        body=body,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        timeout=20,
-    )
+    for variant in variants:
+        q = json.dumps({"_contains": {"assignee_organization": variant}})
+        f = json.dumps(["patent_number", "patent_title", "patent_date",
+                        "assignee_organization"])
+        o = json.dumps({"per_page": min(max_results, 25),
+                        "sort_by": "patent_date", "sort_order": "desc"})
+        params = urllib.parse.urlencode({"q": q, "f": f, "o": o})
 
-    if not data.get("_data_available", False):
-        return {
-            "patents":         [],
-            "_fetched_at":     _now(),
-            "_data_available": False,
-            "_error":          data.get("_error"),
-            "_source":         "USPTO PatentsView",
-        }
+        data = _fetch_json(
+            f"https://api.patentsview.org/patents/query?{params}",
+            timeout=25,
+        )
 
-    patents = []
-    for p in data.get("patents", []):
-        patents.append({
-            "number": p.get("patent_number"),
-            "title":  p.get("patent_title"),
-            "date":   p.get("patent_date"),
-        })
+        # Legacy API: {"patents": [...], "total_patent_count": N}
+        if data.get("_data_available") and data.get("patents"):
+            patents = [
+                {
+                    "number":   p.get("patent_number"),
+                    "title":    p.get("patent_title"),
+                    "date":     p.get("patent_date"),
+                    "assignee": company_name,
+                }
+                for p in data["patents"]
+            ]
+            return {
+                "patents":         patents,
+                "count":           len(patents),
+                "total_found":     data.get("total_patent_count", len(patents)),
+                "search_name_used": variant,
+                "_fetched_at":     _now(),
+                "_data_available": True,
+                "_source":         "USPTO PatentsView API",
+            }
 
+    # All variants returned empty or errors — degrade gracefully
     return {
-        "patents":         patents,
-        "count":           len(patents),
+        "patents":         [],
+        "count":           0,
         "_fetched_at":     _now(),
-        "_data_available": bool(patents),
+        "_data_available": False,
         "_source":         "USPTO PatentsView API",
+        "_note":           (
+            "Patent data unavailable — USPTO PatentsView API did not return "
+            "results for this company.  Verify patent portfolio at "
+            "https://patentsview.org or https://patents.google.com"
+        ),
     }
 
 

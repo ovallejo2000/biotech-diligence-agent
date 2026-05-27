@@ -134,13 +134,37 @@ class PublicMarketsOrchestrator:
     # ── LLM call ─────────────────────────────────────────────────────────────
 
     def _call(self, prompt: str, max_tokens: int = 2000) -> str:
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.content[0].text
+        """
+        Call the LLM with automatic retry on 429 rate-limit responses.
+        Groq free tier: ~6k TPM / 30 RPM — 10 sequential module calls can
+        hit the per-minute cap.  We back off progressively and retry up to
+        3 times before raising so the caller can surface a clean error.
+        """
+        import re as _re
+        last_err = None
+        for attempt in range(4):   # 0, 1, 2, 3
+            try:
+                resp = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    system=_SYSTEM,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return resp.content[0].text
+            except Exception as e:
+                last_err = e
+                msg = str(e)
+                # Detect 429 rate-limit (Groq / OpenAI-style error)
+                is_rate_limit = ("429" in msg or "rate limit" in msg.lower()
+                                 or "rate_limit" in msg.lower())
+                if is_rate_limit and attempt < 3:
+                    # Extract suggested retry-after if present, else use backoff
+                    retry_match = _re.search(r"try again in ([\d.]+)s", msg, _re.IGNORECASE)
+                    wait = float(retry_match.group(1)) + 1 if retry_match else (15 * (attempt + 1))
+                    time.sleep(wait)
+                    continue
+                raise   # non-rate-limit error or exhausted retries
+        raise last_err  # unreachable but satisfies type checker
 
     def _parse(self, raw: str) -> dict:
         text = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
@@ -230,11 +254,38 @@ class PublicMarketsOrchestrator:
                               "module": label})
             yield {"type": "module_start", "step": i, "total": total_mods,
                    "module": label}
+
+            # Small inter-module pause to stay within Groq free-tier RPM (~30/min)
+            if i > 1:
+                time.sleep(2)
+
             try:
                 result = module_fns[key](data, ctx, extra_context)
             except Exception as e:
-                result = {"_error": str(e), "_confidence": "Low",
-                          "_module": key, "_module_label": label}
+                err_msg = str(e)
+                is_rate_limit = ("429" in err_msg or "rate limit" in err_msg.lower())
+                result = {
+                    "_error":       err_msg,
+                    "_confidence":  "Low",
+                    "_module":      key,
+                    "_module_label":label,
+                    "_rate_limited": is_rate_limit,
+                }
+                if is_rate_limit:
+                    # Surface a clear rate-limit event so the UI can show a banner
+                    yield {"type": "rate_limit",
+                           "message": (
+                               "Groq rate limit reached. The analysis will resume "
+                               "automatically — this may take up to 30 seconds."
+                           )}
+                    time.sleep(30)   # hard pause before continuing remaining modules
+                    try:
+                        result = module_fns[key](data, ctx, extra_context)
+                        result.pop("_rate_limited", None)
+                        result.pop("_error", None)
+                    except Exception as e2:
+                        result["_error"] = str(e2)
+
             result["_module"]       = key
             result["_module_label"] = label
             results[key] = result

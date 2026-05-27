@@ -2174,7 +2174,128 @@ function renderM10(r) {
     </div>`:""}`;
 }
 
+function renderM6(r) {
+  const loe = r.approved_asset_loe || [];
+  const gaps = r.data_gaps || [];
+  const fto  = r.freedom_to_operate_risks || [];
+  return `
+    <div class="field-grid" style="grid-template-columns:1fr 1fr;margin-bottom:0.75rem">
+      <div class="field"><div class="field-label">Patent Data</div>
+        <div class="field-val">${r.patent_data_available===false||r.patent_data_available==="false"
+          ? '<span style="color:var(--red)">Unavailable</span>'
+          : (r.patent_count!=null ? r.patent_count+" patents" : "—")
+        }</div></div>
+      <div class="field"><div class="field-label">IP Type</div>
+        <div class="field-val">${nullOrVal(r.ip_type_assessment)}</div></div>
+    </div>
+    ${r.portfolio_assessment ? `<p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem">${esc(r.portfolio_assessment)}</p>` : ""}
+    ${loe.length ? `
+    <div style="margin-bottom:0.75rem">
+      <div class="field-label" style="margin-bottom:0.35rem">Regulatory Exclusivity (LOE)</div>
+      <table class="rnpv-table">
+        <thead><tr><th>Asset</th><th>Type</th><th>Approval</th><th>Est. LOE</th><th>Flag</th></tr></thead>
+        <tbody>${loe.map(a => `<tr>
+          <td><strong>${esc(a.asset||"?")}</strong></td>
+          <td style="font-size:0.78rem">${esc(a.exclusivity_type||"—")}</td>
+          <td>${esc(a.approval_date||"—")}</td>
+          <td>${esc(a.estimated_loe||"—")}</td>
+          <td style="color:${a.flag&&a.flag!=="null"?"var(--red)":"var(--muted)"}">${esc(a.flag&&a.flag!=="null"?a.flag:"✓")}</td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>` : ""}
+    ${fto.length ? `
+    <div style="margin-bottom:0.6rem">
+      <div class="field-label" style="margin-bottom:0.3rem">Freedom-to-Operate Risks</div>
+      ${fto.map(f => `<div class="flag-item">⚠️ ${esc(f)}</div>`).join("")}
+    </div>` : ""}
+    ${gaps.length ? `
+    <div>
+      <div class="field-label" style="margin-bottom:0.3rem;color:var(--muted)">Data Gaps</div>
+      ${gaps.map(g => `<div class="flag-item" style="color:var(--muted);font-size:0.8rem">⬜ ${esc(g)}</div>`).join("")}
+    </div>` : ""}`;
+}
+
+function renderM8(r) {
+  const ins  = r.insider_summary || {};
+  const inst = r.institutional_summary || {};
+  const flag = r.sentiment_flag || "Insufficient data";
+  const flagColor = flag === "Positive" ? "var(--green)"
+                  : flag === "Negative" ? "var(--red)"
+                  : flag === "Neutral"  ? "var(--yellow)"
+                  : "var(--muted)";
+  const note = r._note || inst.data_limitation || "";
+  return `
+    <div class="field-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:0.75rem">
+      <div class="field"><div class="field-label">Insider Buys (90d)</div>
+        <div class="field-val" style="color:var(--green)">${ins.buys_90d!=null?ins.buys_90d:"—"}</div></div>
+      <div class="field"><div class="field-label">Insider Sells (90d)</div>
+        <div class="field-val" style="color:var(--red)">${ins.sells_90d!=null?ins.sells_90d:"—"}</div></div>
+      <div class="field"><div class="field-label">Net Signal</div>
+        <div class="field-val" style="color:${ins.net_signal==="Bullish"?"var(--green)":ins.net_signal==="Bearish"?"var(--red)":"var(--muted)"}">${esc(ins.net_signal||"—")}</div></div>
+    </div>
+    ${(ins.notable_events||[]).length ? `
+    <div style="margin-bottom:0.75rem">
+      <div class="field-label" style="margin-bottom:0.3rem">Notable Events</div>
+      ${ins.notable_events.map(e => `<div class="flag-item">${esc(e)}</div>`).join("")}
+    </div>` : ""}
+    <div style="margin-bottom:0.75rem">
+      <div class="field-label" style="margin-bottom:0.3rem">Institutional Holders (SC 13G/D)</div>
+      ${(inst.known_holders||[]).length
+        ? inst.known_holders.map(h => `<div class="flag-item" style="color:var(--muted)">${esc(h)}</div>`).join("")
+        : `<div style="font-size:0.82rem;color:var(--muted)">${esc(inst.recent_changes||"Insufficient data from free sources")}</div>`
+      }
+    </div>
+    <div class="field" style="margin-bottom:0.6rem">
+      <div class="field-label">Sentiment Signal</div>
+      <div class="field-val" style="color:${flagColor}">${esc(flag)}</div>
+    </div>
+    ${note ? `<div style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem;font-style:italic">${esc(note)}</div>` : ""}`;
+}
+
+function renderM9(r) {
+  const items = r.competitive_assessments || [];
+  if (!items.length) return '<p style="color:var(--muted);font-size:0.85rem">No competitive data available.</p>';
+  return items.map(c => {
+    const comps = c.competitors_identified || [];
+    const crowdColor = c.crowding_risk && c.crowding_risk.startsWith("High") ? "var(--red)"
+                     : c.crowding_risk && c.crowding_risk.startsWith("Medium") ? "var(--yellow)"
+                     : "var(--green)";
+    return `
+    <div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+        <div><strong>${esc(c.our_asset||"?")}</strong>
+          <span style="color:var(--muted);font-size:0.82rem;margin-left:0.5rem">${esc(c.indication||"")} · ${esc(c.our_phase||"")}</span>
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          <span style="font-size:0.78rem;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.07)">${esc(c.positioning||"Unclear")}</span>
+          <span style="font-size:0.78rem;color:${crowdColor}">${esc(c.crowding_risk||"—")}</span>
+        </div>
+      </div>
+      ${c.key_differentiator&&c.key_differentiator!=="null"
+        ? `<div style="font-size:0.82rem;color:var(--muted);margin-bottom:0.5rem">💡 ${esc(c.key_differentiator)}</div>` : ""}
+      ${comps.length ? `
+      <table class="rnpv-table" style="font-size:0.78rem">
+        <thead><tr><th>Company</th><th>Mechanism</th><th>Phase</th><th>Timeline</th></tr></thead>
+        <tbody>${comps.map(comp => `<tr>
+          <td>${esc(comp.company||"Unknown")}</td>
+          <td>${esc(comp.mechanism||"—")}</td>
+          <td>${esc(comp.phase||"—")}</td>
+          <td style="color:var(--muted)">${esc(comp.timeline||"unknown")}</td>
+        </tr>`).join("")}</tbody>
+      </table>` : ""}
+    </div>`;
+  }).join("");
+}
+
 function renderGeneric(r) {
+  // Show a clear error banner if the module failed
+  if (r._error) {
+    const isRateLimit = r._rate_limited || r._error.includes("429") || r._error.toLowerCase().includes("rate limit");
+    if (isRateLimit) {
+      return `<p style="color:var(--yellow);font-size:0.85rem">⏳ Rate limit reached — this module will retry automatically on the next run. Try again in 1 minute.</p>`;
+    }
+    return `<p style="color:var(--red);font-size:0.85rem">⚠️ ${esc(r._error.slice(0, 200))}</p>`;
+  }
   // Fallback: render key-value pairs, skipping internal fields
   const skip = new Set(["_module","_module_label","_confidence","_sources","_data_ts",
                          "_nulls","nulls_flagged","_pos_calculations","_rnpv_detail"]);
@@ -2195,10 +2316,10 @@ const MODULE_RENDERERS = {
   m03_catalysts:  renderM3,
   m04_pos:        renderM4,
   m05_commercial: renderM5,
-  m06_ip:         renderGeneric,
+  m06_ip:         renderM6,
   m07_financial:  renderM7,
-  m08_ownership:  renderGeneric,
-  m09_competitive:renderGeneric,
+  m08_ownership:  renderM8,
+  m09_competitive:renderM9,
   m10_rnpv:       renderM10,
 };
 
@@ -2328,6 +2449,19 @@ function handleEvent(evt) {
     // Prepend exec summary at the top
     const summary = renderExecSummary(currentResults);
     if (summary) panel.insertAdjacentHTML("afterbegin", summary);
+    return;
+  }
+
+  if (evt.type === "rate_limit") {
+    // Show a persistent banner — don't stop the run, it will auto-resume
+    const existing = document.getElementById("rate-limit-banner");
+    if (!existing) {
+      const banner = document.createElement("div");
+      banner.id = "rate-limit-banner";
+      banner.style.cssText = "background:rgba(210,153,34,0.15);border:1px solid var(--yellow);border-radius:8px;padding:0.75rem 1rem;margin-bottom:1rem;font-size:0.85rem;color:var(--yellow);display:flex;align-items:center;gap:0.5rem";
+      banner.innerHTML = `⏳ <span>${esc(evt.message||"Rate limit reached — auto-resuming…")}</span>`;
+      panel.insertBefore(banner, panel.firstChild);
+    }
     return;
   }
 

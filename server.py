@@ -23,6 +23,9 @@ except ImportError:
     raise SystemExit("Run: pip3 install fastapi uvicorn")
 
 from biotech_diligence.orchestrator import DiligenceOrchestrator, MODULE_MAP
+from biotech_diligence.public_markets.orchestrator import (
+    PublicMarketsOrchestrator, list_public_runs, load_run as load_public_run,
+)
 
 app = FastAPI(title="Biotech Diligence Agent", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -78,6 +81,10 @@ class ModuleRequest(BaseModel):
 class UpdateRequest(BaseModel):
     company: str
     new_inputs: str
+
+class PublicRequest(BaseModel):
+    ticker: str
+    inputs: Optional[str] = None
     modules_to_rerun: Optional[list[str]] = None
     format: str = "markdown"
 
@@ -319,6 +326,64 @@ def get_memo(slug: str, run_id: str):
     return {"company": run["company"], "run_id": run_id,
             "timestamp": run.get("timestamp", ""), "memo": memo}
 
+# ------------------------------------------------------------------
+# Public Markets routes
+# ------------------------------------------------------------------
+
+@app.post("/public/run")
+def public_run_stream(req: PublicRequest):
+    """SSE endpoint — streams data-fetch progress then 10 module results."""
+    ticker = req.ticker.strip().upper()
+    inputs = req.inputs or ""
+    q = queue.Queue()
+
+    def on_progress(event: dict):
+        q.put(("event", event))
+
+    def run():
+        try:
+            orch = PublicMarketsOrchestrator()
+            for evt in orch.analyze_stream(ticker, extra_context=inputs,
+                                           progress_cb=on_progress):
+                q.put(("event", evt))
+            _log_run_tokens(20_000)   # public run uses ~2× tokens
+        except Exception as e:
+            q.put(("event", {"type": "error", "message": _friendly_error(str(e))}))
+        finally:
+            q.put(("done", None))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    def event_stream():
+        while True:
+            kind, data = q.get()
+            if kind == "event":
+                yield f"event: public\ndata: {json.dumps(data, default=str)}\n\n"
+                if data.get("type") in ("complete", "error"):
+                    break
+            elif kind == "done":
+                yield "event: done\ndata: {}\n\n"
+                break
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+@app.get("/public/history/data")
+def public_history_data():
+    return {"runs": list_public_runs()}
+
+
+@app.get("/public/memo/{ticker}/{run_id}")
+def get_public_memo(ticker: str, run_id: str):
+    data = load_public_run(ticker.upper(), run_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return data
+
+
 @app.get("/demo")
 def get_demo():
     """Return the pre-built Karuna Therapeutics demo memo (no API key needed)."""
@@ -459,6 +524,8 @@ def methodology():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
+    <a href="/public" class="header-link">Public Markets</a>
+    <span class="nav-sep">|</span>
     <a href="/news" class="header-link">News</a>
     <span class="nav-sep">|</span>
     <a href="/history" class="header-link">History</a>
@@ -769,6 +836,8 @@ def history_page():
   <div class="header-right">
     <a href="/" class="header-link">&larr; Back to Agent</a>
     <span class="nav-sep">|</span>
+    <a href="/public" class="header-link">Public Markets</a>
+    <span class="nav-sep">|</span>
     <a href="/news" class="header-link">News</a>
     <span class="nav-sep">|</span>
     <a href="/methodology" class="header-link">How It Works</a>
@@ -1064,6 +1133,8 @@ def index():
   <h1>Biotech Diligence Agent</h1>
   <span class="badge-header">VC-Grade Analysis</span>
   <div class="header-right">
+    <a href="/public" class="header-link">Public Markets</a>
+    <span class="nav-sep">|</span>
     <a href="/news" class="header-link">News</a>
     <span class="nav-sep">|</span>
     <a href="/history" class="header-link">History</a>
@@ -1525,6 +1596,8 @@ def news_page():
   <div class="header-right">
     <a href="/" class="header-link">&larr; Back to Agent</a>
     <span class="nav-sep">|</span>
+    <a href="/public" class="header-link">Public Markets</a>
+    <span class="nav-sep">|</span>
     <a href="/history" class="header-link">History</a>
     <span class="nav-sep">|</span>
     <a href="/methodology" class="header-link">How It Works</a>
@@ -1643,6 +1716,627 @@ function render(data) {
 }
 
 loadNews(false);
+</script>
+</body>
+</html>"""
+
+
+@app.get("/public", response_class=HTMLResponse)
+def public_page():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Public Markets Diligence — Biotech Diligence Agent</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #7d8590; --blue: #388bfd;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+    --purple: #8b5cf6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         height: 100vh; display: flex; flex-direction: column; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--border);
+           padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem;
+           flex-shrink: 0; }
+  header h1 { font-size: 1.1rem; font-weight: 700; }
+  .badge-header { font-size: 0.7rem; background: #2d1b5f; color: #b794f6;
+                  padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .header-right { margin-left: auto; display: flex; gap: 1rem; align-items: center; }
+  .header-link { color: var(--muted); font-size: 0.8rem; text-decoration: none; }
+  .header-link:hover { color: var(--text); }
+  .nav-sep { color: var(--border); font-size: 0.8rem; user-select: none; }
+
+  .layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Left panel ── */
+  .left-panel { width: 320px; flex-shrink: 0; border-right: 1px solid var(--border);
+                padding: 1.5rem; overflow-y: auto; display: flex;
+                flex-direction: column; gap: 1.25rem; }
+  label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.07em;
+          text-transform: uppercase; color: var(--muted); display: block;
+          margin-bottom: 0.4rem; }
+  input, textarea { width: 100%; background: var(--bg); border: 1px solid var(--border);
+                    border-radius: 6px; color: var(--text); padding: 0.55rem 0.75rem;
+                    font-size: 0.875rem; }
+  input:focus, textarea:focus { outline: none; border-color: var(--blue); }
+  textarea { min-height: 100px; resize: vertical; }
+  .btn { width: 100%; padding: 0.65rem; border-radius: 8px; border: none;
+         font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+  .btn-primary { background: var(--purple); color: #fff; }
+  .btn-primary:hover { background: #7c3aed; }
+  .btn-primary:disabled { opacity: 0.5; cursor: default; }
+  .divider { border: none; border-top: 1px solid var(--border); }
+
+  /* ── Data source badges ── */
+  .sources-grid { display: flex; flex-direction: column; gap: 0.4rem; }
+  .source-row { display: flex; align-items: center; gap: 0.5rem;
+                font-size: 0.75rem; color: var(--muted); }
+  .source-dot { width: 8px; height: 8px; border-radius: 50%;
+                background: var(--border); flex-shrink: 0; }
+  .source-dot.fetching { background: var(--yellow); }
+  .source-dot.ok       { background: var(--green); }
+  .source-dot.error    { background: var(--red); }
+
+  /* ── Module progress (left panel) ── */
+  .progress-bar-wrap { background: #21262d; border-radius: 4px; height: 4px;
+                       overflow: hidden; margin-bottom: 0.75rem; }
+  .progress-bar { height: 100%; background: var(--purple); transition: width 0.4s; width: 0%; }
+  .step-list { display: flex; flex-direction: column; gap: 0.35rem; }
+  .step-item { display: flex; align-items: center; gap: 0.5rem;
+               font-size: 0.75rem; color: var(--muted); }
+  .step-item.active { color: var(--text); }
+  .step-item.done   { color: var(--green); }
+  .step-icon { width: 16px; text-align: center; flex-shrink: 0; }
+
+  /* ── Right panel ── */
+  .right-panel { flex: 1; overflow-y: auto; padding: 2rem; }
+  .empty-state { height: 100%; display: flex; flex-direction: column;
+                 align-items: center; justify-content: center;
+                 color: var(--muted); gap: 0.75rem; }
+  .empty-icon { font-size: 2.5rem; }
+  .empty-state h2 { font-size: 1.1rem; color: var(--text); }
+  .empty-state p  { font-size: 0.875rem; text-align: center; max-width: 320px; }
+
+  /* ── Result cards ── */
+  .result-card { background: var(--surface); border: 1px solid var(--border);
+                 border-radius: 10px; padding: 1.25rem 1.5rem; margin-bottom: 1rem; }
+  .result-card h3 { font-size: 0.85rem; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: 0.06em; color: var(--purple); margin-bottom: 0.75rem; }
+  .confidence-tag { display: inline-block; font-size: 0.7rem; font-weight: 600;
+                    padding: 2px 8px; border-radius: 10px; margin-left: 0.5rem; }
+  .conf-High   { background: #0d2b1a; color: var(--green); }
+  .conf-Medium { background: #1a1500; color: var(--yellow); }
+  .conf-Low    { background: #2b0a0a; color: var(--red); }
+
+  /* ── Executive summary ── */
+  .exec-summary { background: #0d1f38; border: 1px solid #1f3a5f;
+                  border-radius: 10px; padding: 1.25rem 1.5rem; margin-bottom: 1.25rem; }
+  .exec-summary h2 { font-size: 1rem; font-weight: 700; color: #79c0ff; margin-bottom: 0.6rem; }
+  .exec-summary p { font-size: 0.875rem; line-height: 1.7; color: #c9d1d9; }
+
+  /* ── rNPV table ── */
+  .rnpv-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.75rem; }
+  .rnpv-table th { text-align: left; padding: 0.4rem 0.6rem; color: var(--muted);
+                   font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase;
+                   border-bottom: 1px solid var(--border); }
+  .rnpv-table td { padding: 0.5rem 0.6rem; border-bottom: 1px solid #21262d; }
+  .rnpv-table tr:last-child td { border-bottom: none; }
+  .val-green { color: var(--green); font-weight: 600; }
+  .val-yellow { color: var(--yellow); }
+  .val-red    { color: var(--red); }
+
+  /* ── Investment stance ── */
+  .stance { display: inline-flex; align-items: center; gap: 0.4rem;
+            padding: 0.4rem 1rem; border-radius: 8px; font-weight: 700;
+            font-size: 0.9rem; margin-bottom: 1rem; }
+  .stance-Constructive { background: #0d2b1a; color: #3fb950; }
+  .stance-Neutral      { background: #1a1a1a; color: #c9d1d9; }
+  .stance-Cautious     { background: #1a1500; color: #d29922; }
+  .stance-Avoid        { background: #2b0a0a; color: #f85149; }
+
+  /* ── Data fields ── */
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.25rem;
+                margin-top: 0.5rem; }
+  .field { font-size: 0.82rem; }
+  .field-label { color: var(--muted); font-size: 0.72rem; margin-bottom: 1px; }
+  .field-val   { color: var(--text); font-weight: 500; }
+  .field-null  { color: var(--muted); font-style: italic; }
+  .flag-item { font-size: 0.8rem; color: var(--yellow);
+               padding: 0.25rem 0; border-bottom: 1px solid #21262d; }
+  .flag-item:last-child { border-bottom: none; }
+  .sources-note { font-size: 0.72rem; color: var(--muted); margin-top: 0.75rem;
+                  padding-top: 0.6rem; border-top: 1px solid var(--border); }
+
+  /* ── Error / rate-limit ── */
+  .error-box { background: #2b0a0a; border: 1px solid #5c1a1a; border-radius: 8px;
+               padding: 1rem 1.25rem; color: var(--red); font-size: 0.875rem; }
+</style>
+</head>
+<body>
+<header>
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+  </svg>
+  <h1>Biotech Diligence Agent</h1>
+  <span class="badge-header">Public Markets</span>
+  <div class="header-right">
+    <a href="/" class="header-link">&larr; VC Agent</a>
+    <span class="nav-sep">|</span>
+    <a href="/news" class="header-link">News</a>
+    <span class="nav-sep">|</span>
+    <a href="/history" class="header-link">History</a>
+    <span class="nav-sep">|</span>
+    <a href="/methodology" class="header-link">How It Works</a>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- Left panel -->
+  <div class="left-panel">
+    <div>
+      <label>Ticker Symbol</label>
+      <input id="ticker" type="text" placeholder="e.g. MRNA, RXRX, REGN&hellip;"
+             oninput="this.value = this.value.toUpperCase()"
+             onkeydown="if(event.key==='Enter') runPublic()" />
+    </div>
+    <div>
+      <label>Additional context <span style="text-transform:none;font-weight:400">(optional)</span></label>
+      <textarea id="pubInputs" placeholder="Paste analyst reports, PDUFA dates, conference call notes, competitive intelligence, or any context not in public filings&hellip;"></textarea>
+    </div>
+    <button class="btn btn-primary" id="runBtn" onclick="runPublic()">
+      Run Public Markets Diligence
+    </button>
+
+    <hr class="divider">
+
+    <!-- Data fetch status -->
+    <div>
+      <label>Data Sources</label>
+      <div class="sources-grid" id="sourcesGrid">
+        <div class="source-row"><div class="source-dot" id="src-edgar"></div>SEC EDGAR</div>
+        <div class="source-row"><div class="source-dot" id="src-ct"></div>ClinicalTrials.gov</div>
+        <div class="source-row"><div class="source-dot" id="src-fda"></div>openFDA</div>
+        <div class="source-row"><div class="source-dot" id="src-pubmed"></div>PubMed</div>
+        <div class="source-row"><div class="source-dot" id="src-uspto"></div>USPTO Patents</div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- Module progress -->
+    <div id="progressPanel" style="display:none">
+      <label>Analysis Progress</label>
+      <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="step-list" id="stepList"></div>
+    </div>
+  </div>
+
+  <!-- Right panel -->
+  <div class="right-panel" id="rightPanel">
+    <div class="empty-state">
+      <div class="empty-icon">&#x1F4C8;</div>
+      <h2>No analysis yet</h2>
+      <p>Enter a ticker symbol and click <strong>Run Public Markets Diligence</strong>
+         to fetch live data from EDGAR, ClinicalTrials.gov, FDA, USPTO, and PubMed,
+         then run 10 analysis modules.</p>
+      <p style="margin-top:0.5rem; font-size:0.8rem;">
+        Data sources are free APIs &mdash; no paid subscriptions required.
+        Each run uses ~20,000 Groq tokens.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+const MODULES = [
+  "M1: Company Identity",
+  "M2: Pipeline Mapping",
+  "M3: Catalyst Calendar",
+  "M4: Clinical PoS",
+  "M5: Commercial Opportunity",
+  "M6: IP & Exclusivity",
+  "M7: Financial Health",
+  "M8: Ownership & Sentiment",
+  "M9: Competitive Landscape",
+  "M10: rNPV Synthesis",
+];
+
+const SOURCE_MAP = {
+  "SEC EDGAR": "src-edgar",
+  "ClinicalTrials.gov": "src-ct",
+  "openFDA": "src-fda",
+  "PubMed": "src-pubmed",
+  "USPTO": "src-uspto",
+};
+
+let currentResults = {};
+
+function srcId(name) {
+  for (const [k, v] of Object.entries(SOURCE_MAP)) {
+    if (name.toLowerCase().includes(k.toLowerCase())) return v;
+  }
+  return null;
+}
+
+function setSrcStatus(name, status) {
+  const id = srcId(name);
+  if (!id) return;
+  const el = document.getElementById(id);
+  if (el) { el.className = "source-dot " + status; }
+}
+
+function resetSources() {
+  Object.values(SOURCE_MAP).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.className = "source-dot";
+  });
+}
+
+function initStepList() {
+  const list = document.getElementById("stepList");
+  list.innerHTML = MODULES.map((m, i) =>
+    `<div class="step-item" id="step-${i}"><span class="step-icon">&#x25CB;</span>${m}</div>`
+  ).join("");
+  document.getElementById("progressPanel").style.display = "block";
+  document.getElementById("progressBar").style.width = "0%";
+}
+
+function setStep(idx, state) {
+  const el = document.getElementById(`step-${idx}`);
+  if (!el) return;
+  el.className = "step-item " + state;
+  const icons = { active: "&#x25CF;", done: "&#x2713;" };
+  el.querySelector(".step-icon").innerHTML = icons[state] || "&#x25CB;";
+}
+
+function fmtUsd(val) {
+  if (val == null) return '<span class="field-null">null</span>';
+  const n = parseFloat(val);
+  if (n >= 1e3) return `$${(n/1e3).toFixed(1)}B`;
+  return `$${n.toFixed(0)}M`;
+}
+
+function confTag(c) {
+  if (!c) return "";
+  return `<span class="confidence-tag conf-${c}">${c}</span>`;
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function nullOrVal(v, suffix) {
+  if (v == null || v === "null") return '<span class="field-null">null</span>';
+  return esc(String(v)) + (suffix || "");
+}
+
+// ── Renderers for each module ─────────────────────────────────────────────────
+
+function renderM1(r) {
+  return `
+    <p style="font-size:0.875rem;line-height:1.7;color:#c9d1d9;margin-bottom:1rem">
+      ${esc(r.snapshot_paragraph || "")}
+    </p>
+    <div class="field-grid">
+      <div class="field"><div class="field-label">Therapeutic Area</div>
+        <div class="field-val">${nullOrVal(r.therapeutic_area)}</div></div>
+      <div class="field"><div class="field-label">Stage</div>
+        <div class="field-val">${nullOrVal(r.stage)}</div></div>
+      <div class="field"><div class="field-label">Cash</div>
+        <div class="field-val">${r.cash_usd_m != null ? fmtUsd(r.cash_usd_m) : '<span class="field-null">null</span>'}</div></div>
+      <div class="field"><div class="field-label">Runway</div>
+        <div class="field-val">${nullOrVal(r.runway_months, " months")}</div></div>
+      <div class="field"><div class="field-label">Modality</div>
+        <div class="field-val">${nullOrVal(r.modality_flag)}</div></div>
+      <div class="field"><div class="field-label">Commercial Status</div>
+        <div class="field-val">${nullOrVal(r.commercial_status)}</div></div>
+    </div>
+    ${(r.immediate_flags||[]).length ? `<div style="margin-top:0.75rem"><div class="field-label" style="margin-bottom:0.35rem">Flags</div>${r.immediate_flags.map(f=>`<div class="flag-item">⚠️ ${esc(f)}</div>`).join("")}</div>` : ""}
+    ${r.china_exposure && r.china_exposure !== "null" ? `<div class="flag-item" style="margin-top:0.5rem;color:#f85149">🇨🇳 China exposure: ${esc(r.china_exposure)}</div>` : ""}`;
+}
+
+function renderM2(r) {
+  const progs = r.programmes || [];
+  if (!progs.length) return '<p style="color:var(--muted);font-size:0.85rem">No programmes extracted.</p>';
+  const rows = progs.map(p => `
+    <tr>
+      <td><strong>${esc(p.name||"?")}</strong></td>
+      <td>${esc(p.indication||"")}</td>
+      <td>${esc(p.phase||"")}</td>
+      <td>${esc(p.estimated_completion||"—")}</td>
+      <td>${esc(p.next_catalyst||"—")}</td>
+    </tr>`).join("");
+  const discr = (r.discrepancies||[]).filter(Boolean);
+  return `
+    <table class="rnpv-table">
+      <thead><tr><th>Asset</th><th>Indication</th><th>Phase</th><th>Est. Completion</th><th>Next Catalyst</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${discr.length ? `<div style="margin-top:0.75rem"><div class="field-label" style="margin-bottom:0.35rem">⚠️ Discrepancies (CT.gov vs filings)</div>${discr.map(d=>`<div class="flag-item">${esc(d)}</div>`).join("")}</div>` : ""}`;
+}
+
+function renderM3(r) {
+  const cats = r.catalysts || [];
+  if (!cats.length) return '<p style="color:var(--muted);font-size:0.85rem">No catalysts identified.</p>';
+  const rows = cats.map(c => `
+    <tr>
+      <td>${esc(c.expected_date||"—")}</td>
+      <td><strong>${esc(c.event||"")}</strong> — ${esc(c.programme||"")}</td>
+      <td>${esc(c.indication||"")}</td>
+      <td><span style="color:${c.price_impact==="High"?"var(--green)":c.price_impact==="Medium"?"var(--yellow)":"var(--muted)"}">${esc(c.price_impact||"—")}</span></td>
+    </tr>`).join("");
+  const pdufa = r.pdufa_source_note ? `<div class="sources-note">⚠️ ${esc(r.pdufa_source_note)}</div>` : "";
+  return `
+    <table class="rnpv-table">
+      <thead><tr><th>Date</th><th>Event</th><th>Indication</th><th>Impact</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>${pdufa}`;
+}
+
+function renderM4(r) {
+  const ests = r.pos_estimates || [];
+  if (!ests.length) return '<p style="color:var(--muted);font-size:0.85rem">No PoS estimates.</p>';
+  const rows = ests.map(e => `
+    <tr>
+      <td><strong>${esc(e.name||"?")}</strong></td>
+      <td>${esc(e.phase||"")}</td>
+      <td>${esc(e.modality||"")}</td>
+      <td class="val-green">${esc(e.calculated_pos||"—")}</td>
+      <td>${esc(e.analyst_pos||"—")}</td>
+      <td style="font-size:0.78rem;color:var(--muted)">${esc(e.key_swing_factor||"—")}</td>
+    </tr>`).join("");
+  return `
+    <table class="rnpv-table">
+      <thead><tr><th>Asset</th><th>Phase</th><th>Modality</th><th>Calc PoS</th><th>Analyst PoS</th><th>Key Swing Factor</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderM5(r) {
+  const items = r.commercial_assessments || [];
+  if (!items.length) return '<p style="color:var(--muted);font-size:0.85rem">No commercial data.</p>';
+  return items.map(c => `
+    <div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border)">
+      <div style="font-weight:600;margin-bottom:0.4rem">${esc(c.asset||"?")} <span style="font-weight:400;color:var(--muted);font-size:0.8rem">${esc(c.indication||"")}</span></div>
+      <div class="field-grid" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="field"><div class="field-label">Bear</div><div class="field-val val-red">${c.peak_sales_bear_usdm!=null?fmtUsd(c.peak_sales_bear_usdm):"—"}</div></div>
+        <div class="field"><div class="field-label">Base</div><div class="field-val val-yellow">${c.peak_sales_base_usdm!=null?fmtUsd(c.peak_sales_base_usdm):"—"}</div></div>
+        <div class="field"><div class="field-label">Bull</div><div class="field-val val-green">${c.peak_sales_bull_usdm!=null?fmtUsd(c.peak_sales_bull_usdm):"—"}</div></div>
+      </div>
+      ${c.patent_cliff_flag&&c.patent_cliff_flag!=="null"?`<div class="flag-item" style="margin-top:0.4rem">⏳ ${esc(c.patent_cliff_flag)}</div>`:""}
+    </div>`).join("");
+}
+
+function renderM7(r) {
+  const runway = r.runway_months;
+  const rColor = runway == null ? "var(--muted)" :
+    runway < 6 ? "var(--red)" : runway < 12 ? "var(--yellow)" : "var(--green)";
+  return `
+    <div class="field-grid">
+      <div class="field"><div class="field-label">Cash</div>
+        <div class="field-val">${r.cash_usd_m!=null?fmtUsd(r.cash_usd_m):'<span class="field-null">null</span>'}</div></div>
+      <div class="field"><div class="field-label">Monthly Burn</div>
+        <div class="field-val">${r.monthly_burn_usd_m!=null?fmtUsd(r.monthly_burn_usd_m):'<span class="field-null">null</span>'}</div></div>
+      <div class="field"><div class="field-label">Runway</div>
+        <div class="field-val" style="color:${rColor}">${runway!=null?runway+" months":'<span class="field-null">null</span>'}</div></div>
+      <div class="field"><div class="field-label">Runway Assessment</div>
+        <div class="field-val">${nullOrVal(r.runway_assessment)}</div></div>
+      <div class="field"><div class="field-label">Dilution Risk</div>
+        <div class="field-val">${nullOrVal(r.dilution_risk)}</div></div>
+      <div class="field"><div class="field-label">Negotiating Position</div>
+        <div class="field-val">${nullOrVal(r.negotiating_position)}</div></div>
+    </div>
+    ${(r.key_observations||[]).length?`<div style="margin-top:0.75rem">${r.key_observations.map(o=>`<div class="flag-item" style="color:var(--muted)">${esc(o)}</div>`).join("")}</div>`:""}`;
+}
+
+function renderM10(r) {
+  const rnpv = r.rnpv || {};
+  const sens = rnpv.wacc_sensitivity || {};
+  const stance = r.investment_stance || "Neutral";
+  return `
+    <div class="stance stance-${stance}">${stance}</div>
+    <p style="font-size:0.875rem;line-height:1.7;color:#c9d1d9;margin-bottom:1rem">
+      ${esc(r.investment_rationale||"")}
+    </p>
+    <div class="field-label" style="margin-bottom:0.4rem">rNPV — Equity Value (USD)</div>
+    <table class="rnpv-table">
+      <thead><tr><th>Scenario</th><th>Bear</th><th>Base</th><th>Bull</th></tr></thead>
+      <tbody>
+        <tr><td>WACC 10%</td><td class="val-red">—</td>
+          <td class="val-yellow">${sens["10_pct_base_usd_m"]!=null?fmtUsd(sens["10_pct_base_usd_m"]):"—"}</td><td class="val-green">—</td></tr>
+        <tr><td>WACC 12% (base)</td>
+          <td class="val-red">${rnpv.equity_value_bear_usd_m!=null?fmtUsd(rnpv.equity_value_bear_usd_m):"—"}</td>
+          <td class="val-yellow">${rnpv.equity_value_base_usd_m!=null?fmtUsd(rnpv.equity_value_base_usd_m):"—"}</td>
+          <td class="val-green">${rnpv.equity_value_bull_usd_m!=null?fmtUsd(rnpv.equity_value_bull_usd_m):"—"}</td></tr>
+        <tr><td>WACC 15%</td><td class="val-red">—</td>
+          <td class="val-yellow">${sens["15_pct_base_usd_m"]!=null?fmtUsd(sens["15_pct_base_usd_m"]):"—"}</td><td class="val-green">—</td></tr>
+      </tbody>
+    </table>
+    ${rnpv.per_share_base_usd!=null?`<div class="field" style="margin-top:0.75rem"><div class="field-label">Implied per-share value (base case)</div><div class="field-val val-yellow">$${rnpv.per_share_base_usd}</div></div>`:""}
+    ${(r.top_swing_factors||[]).length?`
+    <div style="margin-top:0.75rem">
+      <div class="field-label" style="margin-bottom:0.35rem">Top Swing Factors</div>
+      ${r.top_swing_factors.map(f=>`<div class="flag-item" style="color:${f.direction==="upside"?"var(--green)":"var(--red)"}">
+        ${f.direction==="upside"?"&#x2191;":"&#x2193;"} ${esc(f.factor||"")}
+      </div>`).join("")}
+    </div>`:""}
+    ${(r.key_risks_not_in_model||[]).length?`
+    <div style="margin-top:0.75rem">
+      <div class="field-label" style="margin-bottom:0.35rem">Unmodelled Risks</div>
+      ${r.key_risks_not_in_model.map(k=>`<div class="flag-item">⚠️ ${esc(k)}</div>`).join("")}
+    </div>`:""}`;
+}
+
+function renderGeneric(r) {
+  // Fallback: render key-value pairs, skipping internal fields
+  const skip = new Set(["_module","_module_label","_confidence","_sources","_data_ts",
+                         "_nulls","nulls_flagged","_pos_calculations","_rnpv_detail"]);
+  const entries = Object.entries(r).filter(([k]) => !skip.has(k) && !k.startsWith("_"));
+  if (!entries.length) return '<p style="color:var(--muted);font-size:0.85rem">No structured data available.</p>';
+  return entries.slice(0, 6).map(([k, v]) => {
+    const disp = typeof v === "object" ? JSON.stringify(v).slice(0, 120) : String(v).slice(0, 200);
+    return `<div class="field" style="margin-bottom:0.5rem">
+      <div class="field-label">${esc(k.replace(/_/g," "))}</div>
+      <div class="field-val">${esc(disp)}</div>
+    </div>`;
+  }).join("");
+}
+
+const MODULE_RENDERERS = {
+  m01_identity:   renderM1,
+  m02_pipeline:   renderM2,
+  m03_catalysts:  renderM3,
+  m04_pos:        renderM4,
+  m05_commercial: renderM5,
+  m06_ip:         renderGeneric,
+  m07_financial:  renderM7,
+  m08_ownership:  renderGeneric,
+  m09_competitive:renderGeneric,
+  m10_rnpv:       renderM10,
+};
+
+function renderModuleCard(result) {
+  const key   = result._module;
+  const label = result._module_label || key;
+  const conf  = result._confidence;
+  const sources = (result._sources || []).join(", ");
+  const ts    = result._data_ts || "";
+  const nulls = result.nulls_flagged || result._nulls || [];
+  const fn    = MODULE_RENDERERS[key] || renderGeneric;
+  const body  = fn(result);
+
+  return `
+  <div class="result-card" id="card-${key}">
+    <h3>${esc(label)}${confTag(conf)}</h3>
+    ${body}
+    <div class="sources-note">
+      Sources: ${esc(sources) || "—"} &nbsp;&middot;&nbsp; ${esc(ts)}
+      ${nulls.length ? `&nbsp;&middot;&nbsp; <span style="color:var(--red)">Nulls: ${nulls.map(esc).join(", ")}</span>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderExecSummary(r) {
+  const m10 = r.m10_rnpv;
+  if (!m10 || !m10.executive_summary) return "";
+  return `<div class="exec-summary">
+    <h2>Executive Summary &mdash; ${esc(currentResults._ticker||"")}</h2>
+    <p>${esc(m10.executive_summary)}</p>
+  </div>`;
+}
+
+// ── Main run function ─────────────────────────────────────────────────────────
+
+async function runPublic() {
+  const ticker = document.getElementById("ticker").value.trim().toUpperCase();
+  if (!ticker) { alert("Please enter a ticker symbol."); return; }
+
+  const inputs = document.getElementById("pubInputs").value.trim();
+  const runBtn = document.getElementById("runBtn");
+  const panel  = document.getElementById("rightPanel");
+
+  runBtn.disabled = true;
+  currentResults  = { _ticker: ticker };
+  resetSources();
+  initStepList();
+
+  panel.innerHTML = `<div style="color:var(--muted);padding:2rem;font-size:0.875rem">
+    Fetching data from EDGAR, ClinicalTrials.gov, FDA, USPTO, PubMed&hellip;</div>`;
+
+  const evtSource = new EventSource(`/public/run?ticker=${encodeURIComponent(ticker)}&inputs=${encodeURIComponent(inputs)}`);
+
+  // Reopen as POST via fetch + ReadableStream (SSE over POST not supported natively)
+  // Instead use query params (inputs may be long — use body via fetch streams)
+  evtSource.close();
+
+  // POST-based SSE via fetch
+  let buffer = "";
+  try {
+    const resp = await fetch("/public/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker, inputs }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\\n");
+      buffer = lines.pop();
+      let eventType = null, dataLine = null;
+      for (const line of lines) {
+        if (line.startsWith("event:")) eventType = line.slice(6).trim();
+        if (line.startsWith("data:"))  dataLine  = line.slice(5).trim();
+        if (line === "" && dataLine) {
+          try {
+            handleEvent(JSON.parse(dataLine));
+          } catch(e) {}
+          eventType = null; dataLine = null;
+        }
+      }
+    }
+  } catch(e) {
+    panel.innerHTML = `<div class="error-box"><strong>Connection error:</strong> ${esc(String(e))}</div>`;
+  }
+
+  runBtn.disabled = false;
+}
+
+function handleEvent(evt) {
+  const panel = document.getElementById("rightPanel");
+
+  if (evt.type === "fetch") {
+    setSrcStatus(evt.source, evt.status === "ok" ? "ok" :
+                              evt.status === "error" ? "error" : "fetching");
+    return;
+  }
+
+  if (evt.type === "module_start") {
+    const idx = evt.step - 1;
+    setStep(idx, "active");
+    document.getElementById("progressBar").style.width = `${(evt.step-1)/evt.total*100}%`;
+    if (panel.querySelector(".empty-state") ||
+        panel.innerHTML.includes("Fetching data")) {
+      panel.innerHTML = "";
+    }
+    return;
+  }
+
+  if (evt.type === "module_done") {
+    const idx = evt.step - 1;
+    setStep(idx, "done");
+    document.getElementById("progressBar").style.width = `${evt.step/evt.total*100}%`;
+    const result = evt.result;
+    currentResults[result._module] = result;
+    panel.innerHTML += renderModuleCard(result);
+    panel.scrollTop = panel.scrollHeight;
+    return;
+  }
+
+  if (evt.type === "complete") {
+    document.getElementById("progressBar").style.width = "100%";
+    // Prepend exec summary at the top
+    const summary = renderExecSummary(currentResults);
+    if (summary) panel.insertAdjacentHTML("afterbegin", summary);
+    return;
+  }
+
+  if (evt.type === "error") {
+    panel.innerHTML += `<div class="error-box"><strong>Error:</strong> ${esc(evt.message||"Unknown error")}</div>`;
+    document.getElementById("runBtn").disabled = false;
+    return;
+  }
+}
 </script>
 </body>
 </html>"""
